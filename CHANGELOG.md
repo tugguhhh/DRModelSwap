@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1
+
+- **Driver seat without the co-op mod**: new Riders choice *Fit my model to Frank's seat*. Your model is moved so its
+  driver seat lands where the game seats Frank, and the wheels stay on the game's axles. It works in an unmodded game
+  and is the default unless the Dead Rising co-op mod is installed (then riders are drawn in your model's own seats
+  as before). Command line: `--seats fit|auto|game`.
+- Seats are now found for vehicles whose wheels weren't recognised or are set to *Fixed to the body*.
+
 ## 1.0.0 (first public release)
 
 Everything in the README; the main pieces:

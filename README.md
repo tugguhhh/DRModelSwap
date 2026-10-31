@@ -18,8 +18,8 @@ what it did so you can correct it.
   like it (vehicles by length and width, characters by height, weapons by length). The preview shows the size in metres
   next to a person of Frank's height.
 - **Vehicles drive like the originals**: your wheels spin and steer (four, three or two wheels), doors, hood, trunk,
-  steering wheel and handlebars move with the game's parts, and the driver and passenger sit in your model's seats
-  (with the co-op mod).
+  steering wheel and handlebars move with the game's parts, and Frank sits in your model's driver seat (no other mod
+  needed; with the co-op mod both players sit in your model's seats).
 - **Characters animate**: your model is rigged to the game's skeleton automatically, A-poses are straightened, legs and
   arms are fitted to the game's joints so knees and elbows bend in the right places, the head moves as one piece.
 - **Parts list**: see what the tool took each piece to be (wheel, door, head, body...), change it, or leave pieces out
@@ -95,12 +95,18 @@ spins around the axle, hubs that steer, bones for doors, hood, trunk, steering w
 - **Wheel size**: the game's (default) or yours. **Wheels sideways**: where they are, or the game's track width (the body
   is stretched with them). **Wheel position**: on the game's axles (default) or *where my model has them (test)*: the
   game's wheel bones move to your wheels instead (untested in the game).
-- **Riders**: the driver (blue) and passenger (pink) are shown in the preview, in your model's seats: found from a named
+- **Riders**: the driver (blue) and passenger (pink) are shown in the preview. Your model's seats are found from a named
   steering wheel or handlebar, or from the seats' shape (a cushion with a backrest), near where the original has its
-  seats. *Driver seat* / *Passenger seat* move them by hand (up to 300 with the sliders, 400 typed; a car is about 470
-  long). The game always seats Frank where the original's seat is, so the riders are drawn there by the **Dead Rising
-  co-op mod (v31i or newer)**, which reads `DRModelSwap\seats.txt` (written on Install). Without it they sit where the
-  original's seats are.
+  seats; *Driver seat* / *Passenger seat* correct them by hand (up to 300 with the sliders, 400 typed; a car is about
+  470 long). The game always seats Frank in the original's driver seat, so there are two ways to line them up:
+  - **Fit my model to Frank's seat** (default, works in any game): your model is moved so its driver seat is where the
+    game seats Frank. The wheels stay on the game's axles; the move is limited (80 sideways or front to back, 30 up,
+    down as far as the body's clearance over the ground) and the log says if Frank still sits some way off (Scale
+    helps then).
+  - **Riders in my model's seats (co-op mod)** (default when the **Dead Rising co-op mod** is installed): your model
+    stays where it is and the mod (v31i or newer) draws both players in its seats, reading `DRModelSwap\seats.txt`
+    (written on Install).
+  - *Where the original's are*: nothing is moved.
 
 ### Characters
 
