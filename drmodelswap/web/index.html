@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DR Model Swap</title>
+<style>
+:root{--bg:#16181d;--panel:#1f2229;--panel2:#262a33;--line:#333845;--text:#e6e8ee;--dim:#9aa1b2;--acc:#f0b429;--acc2:#3d8bfd;--ok:#46c37b;--bad:#ef5d5d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 "Segoe UI",system-ui,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:10px 18px;background:#111317;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:17px;margin:0;letter-spacing:.3px}
+header h1 span{color:var(--acc)}
+header .ver{color:var(--dim);font-size:12px}
+.gamebar{display:flex;gap:8px;align-items:center;flex:1;min-width:300px}
+.gamebar input{flex:1}
+input[type=text],input[type=number],select{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 9px;font:inherit}
+.nud{display:flex;align-items:center;gap:6px;margin:2px 0 4px}.nud .hint{width:100px;flex:none}.nud .hint:last-child{width:auto}.nud input[type=range]{flex:1;min-width:60px}.nud input[type=number]{width:52px;flex:none;padding:3px 5px}
+button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}
+button:hover{border-color:#4a5163}
+button.primary{background:var(--acc);border-color:var(--acc);color:#1b1500;font-weight:600}
+button.primary:disabled{opacity:.45;cursor:default}
+button.danger{border-color:#6b2b2b;color:#ffb3b3}
+button.sel{background:var(--acc2);border-color:var(--acc2);color:#fff}
+main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100vh - 54px)}
+#left{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.filters{padding:10px;display:flex;gap:6px;border-bottom:1px solid var(--line)}
+.filters input{flex:1}
+#list{overflow:auto;flex:1}
+.row{padding:7px 12px;border-bottom:1px solid #23262e;cursor:pointer}
+.row:hover{background:#20242c}
+.row.on{background:#2a3140;border-left:3px solid var(--acc)}
+.row.off{opacity:.45;cursor:default}
+.row .n{font-weight:600}
+.row .p{color:var(--dim);font-size:12px}
+.badge{display:inline-block;font-size:11px;padding:0 6px;border-radius:9px;margin-left:6px;vertical-align:1px}
+.b-veh{background:#2b3d5c;color:#9cc2ff}.b-chr{background:#3d2b5c;color:#d3b3ff}.b-obj{background:#33363f;color:#c9ccd6}.b-sw{background:#4a3a10;color:var(--acc)}
+#right{overflow:auto;padding:16px 20px 40px}
+.empty{color:var(--dim);margin-top:60px;text-align:center}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.card h2{font-size:15px;margin:0 0 10px}
+.card h2 small{color:var(--dim);font-weight:400}
+.views{display:grid;grid-template-columns:1fr;gap:12px}
+.cols{display:grid;grid-template-columns:minmax(360px,1fr) minmax(360px,1.15fr);gap:14px;align-items:start}
+.view{background:#26282e;border-radius:8px;min-height:120px;display:flex;flex-direction:column}
+.view img{width:100%;border-radius:8px 8px 0 0;display:block}
+.view .cap{padding:6px 10px;color:var(--dim);font-size:12px}
+.grid{display:grid;grid-template-columns:120px 1fr;gap:10px 14px;align-items:center}
+.grid label{color:var(--dim)}
+.seg{display:flex;gap:4px;flex-wrap:wrap}
+.hint{color:var(--dim);font-size:12px}
+.log{background:#111317;border:1px solid var(--line);border-radius:6px;padding:8px 10px;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;max-height:180px;overflow:auto;color:#c8ccd6}
+.actions{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.msg{padding:8px 12px;border-radius:6px;margin-bottom:12px}
+#msgs{position:sticky;top:-16px;z-index:5;padding-top:2px}
+#msgs .msg{box-shadow:0 4px 14px rgba(0,0,0,.45)}
+.msg.err{background:#3b1f22;color:#ffb3b3}.msg.ok{background:#1d3626;color:#a6f0c1}.msg.info{background:#22293a;color:#b9cdf5}
+.swaps .s{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #2a2e37}
+.drop{border:2px dashed var(--line);border-radius:8px;padding:16px;text-align:center;color:var(--dim);cursor:pointer}
+.drop.hover{border-color:var(--acc);color:var(--text)}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #555;border-top-color:var(--acc);border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (max-width:1150px){.cols{grid-template-columns:1fr}}
+@media (max-width:820px){main{grid-template-columns:1fr;height:auto}#left{height:45vh}}
+</style>
+</head>
+<body>
+<header>
+  <h1>DR <span>Model Swap</span></h1><span class="ver">v__VERSION__</span>
+  <div class="gamebar">
+    <input type="text" id="gamedir" placeholder="Dead Rising folder, e.g. C:\Program Files (x86)\Steam\steamapps\common\Dead Rising">
+    <button id="setgame">Use this folder</button>
+    <select id="detected" title="Found automatically" style="display:none"></select>
+  </div>
+  <button id="quit" title="Stop the tool">Quit</button>
+</header>
+<main>
+  <section id="left">
+    <div class="filters">
+      <input type="text" id="q" placeholder="Search: name or om number (e.g. bat, om0098)">
+      <select id="cat">
+        <option value="ok">Swappable</option>
+        <option value="Vehicle">Vehicles</option>
+        <option value="Object">Objects</option>
+        <option value="Character">Characters</option>
+        <option value="swapped">Swapped</option>
+        <option value="all">Everything</option>
+      </select>
+    </div>
+    <div id="list"><div class="empty" style="margin-top:30px">Pick the game folder first.</div></div>
+  </section>
+  <section id="right">
+    <div id="msgs"></div>
+    <div id="main"><div class="empty">Choose a model on the left.</div></div>
+    <div class="card swaps" id="swapcard" style="display:none">
+      <h2>Installed swaps</h2>
+      <div id="swaplist"></div>
+      <div class="actions"><button class="danger" id="restoreall">Restore every original</button></div>
+    </div>
+  </section>
+</main>
+<template id="tpl">
+  <div class="card">
+    <h2 id="m-title"></h2>
+    <div class="hint" id="m-path"></div>
+    <div class="hint" id="m-arcs" style="margin-top:4px"></div>
+    <div class="hint" id="m-rig" style="margin-top:4px"></div>
+    <div class="actions" style="margin-top:8px"><a id="export" class="hint" href="#" download>Save the original as .glb</a><span class="hint">(a reference to build on in Blender: same size and place, wheels / doors / body parts as separate objects)</span></div>
+  </div>
+  <div class="cols"><div>
+  <div class="card">
+    <h2>1. Your model <small>(.glb, .gltf, .obj; .fbx, .blend, .dae... through Blender)</small></h2>
+    <div class="drop" id="drop">Drop a 3D model here (with its textures, or its whole folder, or a .zip), or click to choose<input type="file" id="file" multiple accept=".glb,.gltf,.obj,.mtl,.bin,.zip,.png,.jpg,.jpeg,.bmp,.tga,.webp,.tif,.tiff,.dds" style="display:none"></div>
+    <div class="hint" id="glbinfo" style="margin-top:8px"></div>
+  </div>
+  <div class="card">
+    <h2>2. Fit it <small>(the preview updates by itself)</small></h2>
+    <div class="grid">
+      <label>Turn</label><div class="seg" id="yaw"><button data-v="auto">Auto</button><button data-v="0">0°</button><button data-v="90">90°</button><button data-v="180">180°</button><button data-v="270">270°</button><span class="hint" style="margin-left:6px">yellow line = front of the game model. Auto turns and stands it up to match the original (the log says how); a turn by hand replaces it</span></div>
+      <label>Stand it up</label><div><select id="tilt"><option value="none">as it is</option><option value="auto">automatic (long side like the original)</option><option value="x+90">tip back 90° (Z-up models)</option><option value="x-90">tip forward 90°</option><option value="z+90">roll left 90°</option><option value="z-90">roll right 90°</option><option value="x180">upside down</option></select></div>
+      <label>Fine turn</label><div class="rotrow"></div>
+      <label>Size</label><div class="seg" id="size"><button data-v="wheels" class="veh">Match the wheels</button><button data-v="height" class="chr">Same height</button><button data-v="footprint" class="nochr">Match length &amp; width</button><button data-v="fit">Fit inside original</button><button data-v="long" class="nochr">Match longest side</button><button data-v="real">Real size (model in metres)</button></div>
+      <label class="veh">Wheels</label><div class="seg veh" id="wheels"><button data-v="auto">Spin &amp; steer</button><button data-v="off">Fixed to the body</button><span class="hint" style="margin-left:6px">name them "wheel" / "tire" in Blender to be sure</span></div>
+      <label class="veh">Wheel position</label><div class="seg veh" id="wheel_fit"><button data-v="axles">On the game's axles</button><button data-v="model">Where my model has them (test)</button><span class="hint" style="margin-left:6px">"test": the game's wheel bones are moved to your wheels instead; whether the game keeps them there needs a try in the game</span></div>
+      <label class="veh">Wheel size</label><div class="seg veh" id="wheel_size"><button data-v="game">The game's (touch the ground)</button><button data-v="mine">Mine</button></div>
+      <label class="veh">Wheels sideways</label><div class="seg veh" id="wheel_x"><button data-v="mine">Where they are</button><button data-v="game">The game's track width (body stretched)</button></div>
+      <label class="veh">Riders</label><div class="seg veh" id="seats"><button data-v="auto">In my model's seats</button><button data-v="game">Where the original's are</button><span class="hint" style="margin-left:6px">blue = driver, pink = passenger in the preview. The co-op mod draws both players there (it needs v31i or newer)</span></div>
+      <label class="veh">Driver seat</label><div class="veh seatrow" data-k="seat"></div>
+      <label class="veh">Passenger seat</label><div class="veh seatrow" data-k="pass"></div>
+      <label class="frank">Frank's clothes</label><div class="seg frank" id="clothes"><button data-v="default">Hide his starting clothes</button><button data-v="keep">Keep them on</button></div>
+      <label class="chr">Pose</label><div class="seg chr" id="pose"><button data-v="auto">Straighten to T-pose if needed</button><button data-v="as_is">Use as it is</button><span class="hint" style="margin-left:6px">the game's people stand with arms straight out to the sides; A-pose models are turned into that, the log says what it found</span></div>
+      <label class="chr">Body</label><div class="seg chr" id="body"><button data-v="fit">Fit to the game's joints</button><button data-v="as_is">Keep my proportions</button><span class="hint" style="margin-left:6px">the game's animations set the hip height and bend at its elbows and knees: legs and arms are stretched or shortened so yours bend there too. "Keep" only scales it (bends in the wrong places if your proportions differ)</span></div>
+      <label>Scale</label><div><input type="range" id="scale" min="0.1" max="5" step="0.05" value="1" style="width:200px;vertical-align:middle"> <input type="number" id="scalen" min="0.05" max="20" step="0.05" value="1" style="width:76px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 7px;font:inherit">×</div>
+      <label>Place</label><div class="seg" id="place"><button data-v="ground">On the ground</button><button data-v="center">Centred</button><button data-v="origin">Keep .glb origin</button></div>
+      <label>Textures up to</label><div><select id="maxtex"><option>512</option><option selected>1024</option><option>2048</option></select> <span class="hint">pixels</span></div>
+      <label>Vertex budget</label><div><select id="maxv"><option value="30000">30,000</option><option value="45000">45,000</option><option value="60000" selected>60,000 (max)</option></select> <span class="hint">bigger models get thinned</span></div>
+    </div>
+  </div>
+  <div class="card" id="partscard" style="display:none">
+    <h2>Parts <small>(what the tool took each piece to be: change it if it's wrong)</small></h2>
+    <div class="hint" style="margin-bottom:6px">Show draws a yellow box round the piece in the preview. "Leave out" drops a piece (a stand, a ground plane, an extra figure).</div>
+    <div id="parts"></div>
+    <div class="actions" style="margin-top:6px"><button class="small" id="partsreset">Back to automatic for every piece</button></div>
+  </div>
+  </div><div>
+  <div class="card">
+    <h2>3. Check and install</h2>
+    <div class="views">
+      <div class="view"><img id="img-orig" alt=""><div class="cap">Original</div></div>
+      <div class="view"><img id="img-new" alt="" style="display:none"><div class="cap" id="cap-new">Your model (blue box = the original's size)</div></div>
+      <div class="view" id="view-pose" style="display:none"><img id="img-pose" alt=""><div class="cap" id="cap-pose">Moving parts check</div></div>
+    </div>
+    <div class="log" id="log" style="margin-top:12px;display:none"></div>
+    <div class="actions">
+      <button class="primary" id="install" disabled>Install into the game</button>
+      <button class="danger" id="restore" style="display:none">Restore the original</button>
+    </div>
+    <div class="hint" style="margin-top:8px">Close the game first. Originals are backed up in the game folder under DRModelSwap\backup.</div>
+  </div>
+  </div></div>
+</template>
+<script>
+const TOKEN = "__TOKEN__";
+const $ = s => document.querySelector(s);
+let models = [], sel = null, st = {}, glbInfo = null, busy = false, timer = null;
+let settings = {roles: {}, rot_x: 0, rot_y: 0, rot_z: 0, orient: 'auto', yaw: 0, tilt: 'none', size: 'footprint', scale: 1, place: 'ground', max_texture: 1024, max_vertices: 60000, wheels: 'auto', wheel_size: 'game', wheel_x: 'mine', clothes: 'default', wheel_fit: 'axles', pose: 'auto', body: 'fit', seats: 'auto', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0};
+
+async function api(path, body, raw, headers) {
+  const opt = {headers: Object.assign({'X-Token': TOKEN}, headers || {})};
+  if (body !== undefined) { opt.method = 'POST'; opt.body = raw ? body : JSON.stringify(body); if (!raw) opt.headers['Content-Type'] = 'application/json'; }
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || ('error ' + r.status)); e.data = j; throw e; }
+  return j;
+}
+function msg(text, kind) { const m = $('#msgs'); m.innerHTML = text ? `<div class="msg ${kind || 'info'}">${text}</div>` : ''; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+
+async function refresh() {
+  st = await api('/api/state');
+  $('#gamedir').value = $('#gamedir').value || st.game;
+  const d = $('#detected');
+  const extra = (st.detected || []).filter(x => x !== st.game);
+  d.style.display = extra.length ? '' : 'none';
+  d.innerHTML = '<option value="">Found:</option>' + extra.map(x => `<option>${esc(x)}</option>`).join('');
+  if (st.scanning) {
+    const [a, b, t] = st.progress;
+    $('#list').innerHTML = `<div class="empty" style="margin-top:30px"><span class="spinner"></span> Reading the game files… ${b ? Math.round(100 * a / b) + '%' : ''}<br><span class="hint">${esc(t)}</span><br><span class="hint">(only slow the first time)</span></div>`;
+    setTimeout(refresh, 500); return;
+  }
+  if (st.scan_error) msg('Could not read the game files: ' + esc(st.scan_error), 'err');
+  if (st.game) { models = await api('/api/models'); drawList(); }
+  drawSwaps();
+}
+function drawList() {
+  const q = $('#q').value.trim().toLowerCase(), c = $('#cat').value, sw = st.swaps || {};
+  const rows = models.filter(m => {
+    if (c === 'ok' && !m.supported) return false;
+    if ((c === 'Vehicle' || c === 'Object' || c === 'Character') && (m.category !== c || !m.supported)) return false;
+    if (c === 'swapped' && !sw[m.key]) return false;
+    return !q || m.path.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q);
+  });
+  $('#list').innerHTML = rows.length ? rows.slice(0, 600).map(m => {
+    const base = m.path.split('\\').pop();
+    const badge = m.category === 'Vehicle' ? '<span class="badge b-veh">vehicle</span>' : m.category === 'Character' ? '<span class="badge b-chr">character</span>' : (m.category === 'Object' ? '<span class="badge b-obj">object</span>' : `<span class="badge b-obj">${esc(m.category.toLowerCase())}</span>`);
+    const swb = sw[m.key] ? '<span class="badge b-sw">swapped</span>' : '';
+    return `<div class="row ${m.supported ? '' : 'off'} ${sel && sel.key === m.key ? 'on' : ''}" data-k="${esc(m.key)}" title="${esc(m.supported ? m.path : m.reason)}">
+      <div class="n">${esc(m.name || base)}${badge}${swb}</div><div class="p">${esc(m.path)} · ${m.verts ? m.verts.toLocaleString() + ' vertices' : esc(m.reason)}</div></div>`;
+  }).join('') : '<div class="empty" style="margin-top:30px">Nothing matches.</div>';
+}
+function drawSwaps() {
+  const sw = st.swaps || {}, keys = Object.keys(sw);
+  $('#swapcard').style.display = keys.length ? '' : 'none';
+  $('#swaplist').innerHTML = keys.map(k => `<div class="s"><div><b>${esc(sw[k].path)}</b> ← ${esc(sw[k].glb || '')} <span class="hint">${esc(sw[k].time || '')}</span></div><button data-r="${esc(k)}">Restore</button></div>`).join('');
+}
+function choose(key) {
+  const m = models.find(x => x.key === key); if (!m || !m.supported) return;
+  sel = m; drawList();
+  $('#main').innerHTML = ''; $('#main').appendChild($('#tpl').content.cloneNode(true));
+  $('#m-title').textContent = m.name || m.path.split('\\').pop();
+  $('#m-path').textContent = m.path + ' · ' + m.verts.toLocaleString() + ' vertices';
+  $('#m-arcs').textContent = m.arcs.length > 1 ? `Stored in ${m.arcs.length} game files (all get changed): ${m.arcs.join(', ')}` : `Stored in ${m.arcs[0]}`;
+  $('#img-orig').src = '/api/preview/original?t=' + TOKEN + '&key=' + encodeURIComponent(key);
+  $('#restore').style.display = (st.swaps || {})[key] ? '' : 'none';
+  $('#m-rig').textContent = m.rig ? 'Moving parts: ' + m.rig + (m.category === 'Vehicle' ? ' (wheels spin and steer, doors / hood / trunk / handlebars move if your parts are named so)' : '') : '';
+  $('#export').href = '/api/export?t=' + TOKEN + '&key=' + encodeURIComponent(key);
+  const veh = m.category === 'Vehicle', chr = m.category === 'Character', frank = m.path.toLowerCase().endsWith('pl00');
+  document.querySelectorAll('#main .veh').forEach(e => e.style.display = veh ? '' : 'none');
+  document.querySelectorAll('#main .chr').forEach(e => e.style.display = chr ? '' : 'none');
+  document.querySelectorAll('#main .nochr').forEach(e => e.style.display = chr ? 'none' : '');
+  document.querySelectorAll('#main .frank').forEach(e => e.style.display = frank ? '' : 'none');
+  // each game model keeps its own settings; a new one starts from its kind's defaults (nothing carries over)
+  Object.assign(settings, {orient: 'auto', yaw: 0, tilt: 'none', scale: 1, place: 'ground', size: veh ? 'wheels' : chr ? 'height' : 'long',
+    seats: 'auto', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0, pose: 'auto', body: 'fit', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0});
+  if (settingsByKey[key]) Object.assign(settings, JSON.parse(settingsByKey[key]));
+  wire();
+  // the file this game model was given (earlier now, or the one its installed swap was made from)
+  glbInfo = null; $('#glbinfo').innerHTML = '';
+  api('/api/use', {key}).then(r => {
+    if (!sel || sel.key !== key) return;
+    if (r.info) {
+      if (r.settings && !settingsByKey[key]) { Object.assign(settings, r.settings); wire(); }
+      glbInfo = r.info; showGlb(glbInfo); schedule(0);
+    } else drawParts([]);
+  }).catch(e => msg(esc(e.message), 'err'));
+}
+// seat nudges: three sliders per seat (game units; the car is about 470 long), on top of what was found
+// fine turn: any angle around each axis, on top of Turn / Stand it up (a model drawn at a slant, a tilted handle...)
+function rotRows() {
+  const row = document.querySelector('#main .rotrow'); if (!row) return;
+  row.innerHTML = [['x', 'tip forward / back'], ['y', 'turn left / right'], ['z', 'roll']].map(([a, t]) =>
+    `<div class="nud"><span class="hint">${t}</span><input type="range" min="-180" max="180" step="1" data-a="${a}"><input type="number" min="-180" max="180" step="1" data-n="${a}"><span class="hint">°</span></div>`).join('') +
+    `<button class="small" data-reset="1">Reset</button> <span class="hint">degrees; the preview updates</span>`;
+  const paint = () => row.querySelectorAll('input[type=range]').forEach(i => { const v = settings['rot_' + i.dataset.a] || 0; i.value = v; row.querySelector(`[data-n="${i.dataset.a}"]`).value = v; });
+  row.querySelectorAll('input[type=range]').forEach(i => i.oninput = () => { settings['rot_' + i.dataset.a] = +i.value; paint(); schedule(); });
+  row.querySelectorAll('input[type=number]').forEach(i => i.onchange = () => { let v = Math.round(+i.value) || 0; v = ((v + 180) % 360 + 360) % 360 - 180; settings['rot_' + i.dataset.n] = v; paint(); schedule(); });
+  row.querySelector('[data-reset]').onclick = () => { settings.rot_x = settings.rot_y = settings.rot_z = 0; paint(); schedule(); };
+  paint();
+}
+function seatRows() {
+  document.querySelectorAll('.seatrow').forEach(row => {
+    const k = row.dataset.k;
+    row.innerHTML = [['x', 'its right \u2194 left'], ['y', 'down \u2194 up'], ['z', 'back \u2194 front']].map(([a, t]) =>
+      `<div class="nud"><span class="hint">${t}</span><input type="range" min="-300" max="300" step="1" data-a="${a}"><input type="number" min="-400" max="400" step="1" data-n="${a}"></div>`).join('') +
+      `<button class="small" data-reset="1">Reset</button> <span class="hint">a car is about 470 long, 190 wide; type a number for exact moves</span>`;
+    const paint = () => row.querySelectorAll('input[type=range]').forEach(i => { const v = settings[k + '_' + i.dataset.a] || 0; i.value = Math.max(-300, Math.min(300, v)); row.querySelector(`[data-n="${i.dataset.a}"]`).value = v; });
+    row.querySelectorAll('input[type=range]').forEach(i => i.oninput = () => { settings[k + '_' + i.dataset.a] = +i.value; paint(); schedule(); });
+    row.querySelectorAll('input[type=number]').forEach(i => i.onchange = () => { let v = Math.round(+i.value) || 0; v = Math.max(-400, Math.min(400, v)); settings[k + '_' + i.dataset.n] = v; paint(); schedule(); });
+    row.querySelector('[data-reset]').onclick = () => { ['x', 'y', 'z'].forEach(a => settings[k + '_' + a] = 0); paint(); schedule(); };
+    paint();
+  });
+}
+function segs(id, key, num) {
+  const el = $('#' + id);
+  const paint = () => el.querySelectorAll('button').forEach(b => b.classList.toggle('sel', String(settings[key]) === b.dataset.v));
+  el.querySelectorAll('button').forEach(b => b.onclick = () => { settings[key] = num ? +b.dataset.v : b.dataset.v; paint(); schedule(); });
+  paint();
+}
+function wire() {
+  { const el = $('#yaw'); const paint = () => el.querySelectorAll('button').forEach(b => b.classList.toggle('sel', settings.orient === 'auto' ? b.dataset.v === 'auto' : b.dataset.v === String(settings.yaw)));
+    el.querySelectorAll('button').forEach(b => b.onclick = () => { if (b.dataset.v === 'auto') settings.orient = 'auto'; else { settings.orient = 'manual'; settings.yaw = +b.dataset.v; } paint(); schedule(); }); paint(); }
+  segs('size', 'size'); segs('place', 'place');
+  segs('wheels', 'wheels'); segs('wheel_size', 'wheel_size'); segs('wheel_x', 'wheel_x'); segs('clothes', 'clothes'); segs('wheel_fit', 'wheel_fit'); segs('pose', 'pose'); segs('body', 'body'); segs('seats', 'seats'); seatRows(); rotRows();
+  $('#tilt').value = settings.tilt; $('#tilt').onchange = e => { settings.tilt = e.target.value; if (settings.orient === 'auto') { settings.orient = 'manual'; settings.yaw = 0; $('#yaw').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.v === '0')); } schedule(); };
+  $('#scale').value = Math.min(5, settings.scale); $('#scalen').value = (+settings.scale).toFixed(2);
+  $('#scale').oninput = e => { settings.scale = +e.target.value; $('#scalen').value = settings.scale.toFixed(2); schedule(); };
+  $('#scalen').onchange = e => { let v = +e.target.value; if (!(v > 0)) v = 1; v = Math.max(0.05, Math.min(20, v)); settings.scale = v; e.target.value = v.toFixed(2); $('#scale').value = Math.min(5, v); schedule(); };
+  $('#maxtex').value = String(settings.max_texture); $('#maxtex').onchange = e => { settings.max_texture = +e.target.value; schedule(); };
+  $('#maxv').value = String(settings.max_vertices); $('#maxv').onchange = e => { settings.max_vertices = +e.target.value; schedule(); };
+  const drop = $('#drop'), file = $('#file');
+  drop.onclick = () => file.click();
+  file.onchange = () => file.files.length && upload([...file.files].map(f => ({name: f.name, file: f})));
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover'); };
+  drop.ondragleave = () => drop.classList.remove('hover');
+  drop.ondrop = async e => {
+    e.preventDefault(); drop.classList.remove('hover');
+    const items = [...(e.dataTransfer.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+    if (items.length) upload(await readEntries(items));
+    else if (e.dataTransfer.files.length) upload([...e.dataTransfer.files].map(f => ({name: f.name, file: f})));
+  };
+  $('#install').onclick = install;
+  $('#restore').onclick = () => removeSwap(sel.key);
+}
+function showGlb(i) {
+  $('#glbinfo').innerHTML = `<b>${esc(i.file)}</b>: ${i.vertices.toLocaleString()} vertices, ${i.triangles.toLocaleString()} triangles, ${i.materials} materials` +
+    (i.vertices > 60000 ? ' <span style="color:var(--acc)">(over the game\'s limit: it will be thinned roughly; decimating in Blender first looks better)</span>' : '') +
+    (i.animations ? ` <span class="hint">· animations are ignored, the model is used as it stands</span>` : '') +
+    (i.missing && i.missing.length ? `<br><span style="color:var(--acc)">Not found, drawn in plain colour: ${i.missing.map(esc).join(', ')}. Pick these files together with the model, or drop its whole folder.</span>` : '') +
+    (i.format === 'obj' ? ' <span class="hint">· .obj has no units: use a Size option other than "Real size"</span>' : '') +
+    (i.via ? ` <span class="hint">· converted with ${esc(i.via)}</span>` : '');
+}
+// a dropped folder: every file in it (sub-folders too), with its path inside the folder
+async function readEntries(entries, prefix) {
+  const out = [];
+  for (const en of entries) {
+    if (en.isFile) out.push({name: (prefix || '') + en.name, file: await new Promise((ok, bad) => en.file(ok, bad))});
+    else if (en.isDirectory) {
+      const rd = en.createReader(); let batch, all = [];
+      do { batch = await new Promise((ok, bad) => rd.readEntries(ok, bad)); all = all.concat(batch); } while (batch.length);
+      out.push(...await readEntries(all, (prefix || '') + en.name + '/'));
+    }
+  }
+  return out;
+}
+const MODEL_RE = /\.(glb|gltf|obj|zip|fbx|blend|dae|3ds|stl|ply|x3d|wrl|usdz?|usd[ac]|abc)$/i,
+  USEFUL_RE = /\.(glb|gltf|obj|mtl|bin|zip|png|jpe?g|bmp|tga|webp|tiff?|dds|psd|exr|hdr|fbx|blend|dae|3ds|stl|ply|x3d|wrl|usdz?|usd[ac]|abc)$/i;
+let lastUpload = null; const settingsByKey = {};
+// one file is sent as it is; several are packed: "DRMSPACK", header length, JSON [{name, size}], then the files
+async function upload(list) {
+  list = list.filter(x => USEFUL_RE.test(x.name));
+  const main = list.find(x => MODEL_RE.test(x.name));
+  if (!main) { clearTimeout(timer); glbInfo = null; $('#glbinfo').textContent = ''; msg('Pick a 3D model (.glb, .gltf, .obj, .fbx, .blend, .dae, .3ds, .stl, .ply...) with its textures, its folder, or a .zip.', 'err'); return; }
+  lastUpload = list;
+  $('#glbinfo').innerHTML = '<span class="spinner"></span> Reading ' + esc(main.name) + (list.length > 1 ? ' and ' + (list.length - 1) + ' more file(s)' : '') + '…';
+  try {
+    let body, name = main.name;
+    if (list.length === 1) body = await main.file.arrayBuffer();
+    else {
+      const bufs = await Promise.all(list.map(x => x.file.arrayBuffer()));
+      const head = new TextEncoder().encode(JSON.stringify(list.map((x, i) => ({name: x.name, size: bufs[i].byteLength}))));
+      const pre = new Uint8Array(12); pre.set(new TextEncoder().encode('DRMSPACK')); new DataView(pre.buffer).setUint32(8, head.length, true);
+      body = new Blob([pre, head, ...bufs]);
+    }
+    settings.roles = {};
+    glbInfo = await api('/api/glb', body, true, {'X-Filename': encodeURIComponent(name), 'X-Key': encodeURIComponent(sel ? sel.key : ''), 'Content-Type': 'application/octet-stream'});
+    msg(''); showGlb(glbInfo); schedule(0);
+  } catch (e) {
+    $('#glbinfo').textContent = ''; msg(esc(e.message), 'err');
+    if (e.data && e.data.need_blender) {
+      // ask where Blender is, then try the same files again
+      $('#glbinfo').innerHTML = `Blender's location (the folder it's in, or blender.exe itself): <input id="blpath" style="width:60%" placeholder="C:\\Program Files\\Blender Foundation\\Blender 4.2"> <button class="small" id="bluse">Use</button>`;
+      $('#bluse').onclick = async () => { try { await api('/api/blender', {path: $('#blpath').value}); msg(''); upload(lastUpload); } catch (e2) { msg(esc(e2.message), 'err'); } };
+    }
+  }
+}
+function schedule(ms) { if (sel) settingsByKey[sel.key] = JSON.stringify(settings); clearTimeout(timer); if (!glbInfo || !sel) return; $('#install').disabled = true; timer = setTimeout(preview, ms === undefined ? 450 : ms); }
+const ROLE_NAMES = {auto: 'Automatic', body: 'Body (doesn\'t move)', wheel: 'Wheel', steering_wheel: 'Steering wheel', door: 'Door', hood: 'Hood',
+  trunk: 'Trunk', handlebar: 'Handlebar', fork: 'Fork', swingarm: 'Swingarm', crank: 'Pedals / crank', head: 'Head (moves with it)', remove: 'Leave out'};
+function drawParts(list) {
+  const card = $('#partscard'); if (!card) return;
+  if (!list.length) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const veh = sel && sel.category === 'Vehicle', chr = sel && sel.category === 'Character';
+  const roles = veh ? ['auto', 'body', 'wheel', 'steering_wheel', 'door', 'hood', 'trunk', 'handlebar', 'fork', 'swingarm', 'crank', 'remove']
+    : chr ? ['auto', 'head', 'body', 'remove'] : ['auto', 'remove'];
+  $('#parts').innerHTML = list.map((e, k) => {
+    const cur = settings.roles[e.id] || 'auto';
+    const found = e.found === 'remove' ? 'left out' : (ROLE_NAMES[e.found] || e.found).toLowerCase();
+    const opts = roles.map(r => `<option value="${r}"${r === cur ? ' selected' : ''}>${r === 'auto' ? 'Auto: ' + esc(found.replace(/ \(.*\)/, '')) : ROLE_NAMES[r]}</option>`).join('');
+    return `<div style="display:flex;gap:8px;align-items:center;margin:4px 0"><div style="flex:1;min-width:0;line-height:1.2"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.name)}">${esc(e.name)}</div>` +
+      `<div class="hint">${esc(e.where || '')}${e.size ? ' · size ' + Math.round(e.size) : ''}</div></div>` +
+      `<select data-k="${k}" style="width:150px">${opts}</select>` + (e.box ? `<button class="small" data-show="${esc(e.id)}">Show</button>` : '<span style="width:52px"></span>') + `</div>`;
+  }).join('');
+  $('#parts').querySelectorAll('select').forEach(el => el.onchange = () => {
+    const e = list[+el.dataset.k]; e.ids.forEach(id => { if (el.value === 'auto') delete settings.roles[id]; else settings.roles[id] = el.value; }); schedule(); });
+  $('#parts').querySelectorAll('[data-show]').forEach(b => b.onclick = () => { $('#img-new').src = '/api/preview/new?t=' + TOKEN + '&hl=' + encodeURIComponent(b.dataset.show) + '&n=' + Date.now(); });
+  $('#partsreset').onclick = () => { settings.roles = {}; schedule(); };
+}
+async function preview() {
+  if (busy) { schedule(); return; }
+  busy = true; const key = sel.key;
+  $('#cap-new').innerHTML = '<span class="spinner"></span> Converting…';
+  try {
+    const r = await api('/api/convert', {key, settings});
+    if (!sel || sel.key !== key || !glbInfo) return;
+    $('#img-new').src = '/api/preview/new?t=' + TOKEN + '&n=' + Date.now(); $('#img-new').style.display = '';
+    const s = r.stats;
+    const big = Math.max(...s.size), obig = Math.max(...s.original_size);
+    const m = v => v >= 100 ? (v / 100).toFixed(2) + ' m' : Math.round(v) + ' cm';
+    $('#cap-new').textContent = `In the game: ${m(big)} at its longest (the original: ${m(obig)}), ${s.size.map(x => Math.round(x)).join(' × ')} units (1 unit = 1 cm). ` +
+      `Blue box = the original` + (s.kind === 'character' ? '' : '; grey figure = a person 1.83 m tall') + `. ${s.vertices.toLocaleString()} vertices.`;
+    $('#log').style.display = ''; $('#log').textContent = r.log.join('\n');
+    drawParts(s.pieces || []);
+    if (s.pose_caption) { $('#img-pose').src = '/api/preview/pose?t=' + TOKEN + '&n=' + Date.now(); $('#view-pose').style.display = ''; $('#cap-pose').textContent = 'Moving parts check, ' + s.pose_caption + ': everything should stay attached and in place'; }
+    else $('#view-pose').style.display = 'none';
+    $('#install').disabled = false; msg('');
+  } catch (e) { $('#cap-new').textContent = 'Your model'; msg(esc(e.message), 'err'); }
+  finally { busy = false; }
+}
+async function install() {
+  $('#install').disabled = true; msg('<span class="spinner"></span> Writing the game files… (big bundle files take a few seconds)', 'info');
+  try {
+    const r = await api('/api/install', {key: sel.key});
+    msg('Installed. ' + esc(r.log.join(' · ')) + '<br>Start the game; the new model shows wherever this one appears. Your partner needs the same files to see it.', 'ok');
+    await refresh(); $('#restore').style.display = '';
+  } catch (e) { msg(esc(e.message), 'err'); }
+  $('#install').disabled = false;
+}
+async function removeSwap(key) {
+  msg('<span class="spinner"></span> Restoring…', 'info');
+  try { const r = await api('/api/remove', {key}); msg('Original restored. ' + esc(r.log.join(' · ')), 'ok'); await refresh(); if (sel && sel.key === key) $('#restore').style.display = 'none'; }
+  catch (e) { msg(esc(e.message), 'err'); }
+}
+$('#list').onclick = e => { const r = e.target.closest('.row'); if (r) choose(r.dataset.k); };
+$('#q').oninput = drawList; $('#cat').onchange = drawList;
+$('#swaplist').onclick = e => { const b = e.target.closest('button[data-r]'); if (b) removeSwap(b.dataset.r); };
+$('#restoreall').onclick = async () => { if (!confirm('Put every original model back?')) return; msg('<span class="spinner"></span> Restoring…'); try { const r = await api('/api/remove', {all: true}); msg('All originals restored. ' + esc(r.log.join(' · ')), 'ok'); await refresh(); } catch (e) { msg(esc(e.message), 'err'); } };
+$('#setgame').onclick = async () => { try { msg(''); await api('/api/game', {path: $('#gamedir').value}); refresh(); } catch (e) { msg(esc(e.message), 'err'); } };
+$('#detected').onchange = e => { if (e.target.value) { $('#gamedir').value = e.target.value; $('#setgame').click(); } };
+$('#quit').onclick = async () => { await api('/api/quit', {}).catch(() => {}); document.body.innerHTML = '<div class="empty">DR Model Swap has stopped. You can close this tab.</div>'; };
+refresh().catch(e => msg(esc(e.message), 'err'));
+</script>
+</body>
+</html>

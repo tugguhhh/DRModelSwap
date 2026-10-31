@@ -1,0 +1,96 @@
+"""Command line: python -m drmodelswap [gui|list|swap|restore] ...  (no arguments = open the window)."""
+import argparse, os, sys
+
+from . import __version__, convert, export, game, mod, models
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog='drmodelswap', description='Replace Dead Rising (PC) object, vehicle and character models with .glb, .gltf or .obj models.')
+    ap.add_argument('--version', action='version', version=__version__)
+    sub = ap.add_subparsers(dest='cmd')
+    g = sub.add_parser('gui', help='open the tool in your browser (default)')
+    g.add_argument('--game', help='Dead Rising folder')
+    g.add_argument('--port', type=int, default=0)
+    g.add_argument('--no-browser', action='store_true')
+    ls = sub.add_parser('list', help='list the models you can replace')
+    ls.add_argument('game')
+    ls.add_argument('query', nargs='?', default='')
+    ls.add_argument('--all', action='store_true', help='also list models the tool cannot replace')
+    sw = sub.add_parser('swap', help='replace a model with a .glb, .gltf or .obj (or a folder / .zip holding one)')
+    sw.add_argument('game')
+    sw.add_argument('model', help='model path (model\\om\\om0098\\om0098) or just its name (om0098)')
+    sw.add_argument('glb', metavar='model', help='.glb, .gltf or .obj file (its textures are read from around it), a folder, or a .zip')
+    sw.add_argument('--yaw', type=int, default=0, choices=[0, 90, 180, 270], help='turn by hand (without --yaw / --tilt the model is turned automatically)')
+    sw.add_argument('--tilt', default='none', choices=list(convert.TILTS) + ['auto'])
+    sw.add_argument('--size', default='auto', choices=['auto', 'footprint', 'fit', 'long', 'real', 'wheels', 'height'])
+    sw.add_argument('--scale', type=float, default=1.0)
+    sw.add_argument('--place', default='ground', choices=['ground', 'center', 'origin'])
+    sw.add_argument('--max-texture', type=int, default=1024)
+    sw.add_argument('--max-vertices', type=int, default=60000)
+    sw.add_argument('--wheels', default='auto', choices=['auto', 'off'], help='vehicles: make the wheels spin and steer')
+    sw.add_argument('--wheel-size', default='game', choices=['game', 'mine'])
+    sw.add_argument('--wheel-x', default='mine', choices=['mine', 'game'])
+    sw.add_argument('--clothes', default='default', choices=['default', 'keep'], help='Frank: hide his starting clothes')
+    sw.add_argument('--wheel-fit', default='axles', choices=['axles', 'model'], help='vehicles: wheels onto the game axles, or game wheel bones moved to your wheels (test)')
+    sw.add_argument('--pose', default='auto', choices=['auto', 'as_is'], help='characters: straighten A-pose models to the T-pose')
+    sw.add_argument('--body', default='fit', choices=['fit', 'as_is'], help='characters: fit legs and arms onto the game skeleton\'s joints')
+    ex = sub.add_parser('export', help='save a game model as .glb (a reference to build on in Blender)')
+    ex.add_argument('game')
+    ex.add_argument('model')
+    ex.add_argument('out')
+    rs = sub.add_parser('restore', help='put an original model back')
+    rs.add_argument('game')
+    rs.add_argument('model', nargs='?')
+    rs.add_argument('--all', action='store_true')
+    a = ap.parse_args(argv)
+
+    if a.cmd in (None, 'gui'):
+        from . import server
+        server.serve(port=getattr(a, 'port', 0), open_browser=not getattr(a, 'no_browser', False), game_dir=getattr(a, 'game', None))
+        return 0
+    gm = game.Game(a.game)
+    print('reading the game files (slow only the first time)...')
+    gm.scan()
+
+    resolve = gm.resolve
+
+    if a.cmd == 'list':
+        q = a.query.lower()
+        for k, m in sorted(gm.models.items()):
+            if (m['supported'] or a.all) and (q in k or q in (m['name'] or '').lower()):
+                print('%-28s %-9s %-40s %s' % (m['path'], m['category'], (m['name'] or '')[:40], '' if m['supported'] else '(' + m['reason'] + ')'))
+        return 0
+    if a.cmd == 'swap':
+        key = resolve(a.model)
+        parts, mats, info = models.load_path(a.glb)
+        print('%s: %d vertices, %d triangles, %d materials' % (info['file'], info['vertices'], info['triangles'], info['materials']))
+        if info.get('missing'):
+            print('  not found (drawn in plain colour): ' + ', '.join(info['missing']))
+        st = convert.Settings(yaw=a.yaw, tilt=a.tilt, size=a.size, scale=a.scale, place=a.place, max_texture=a.max_texture, max_vertices=a.max_vertices,
+                              wheels=a.wheels, wheel_size=a.wheel_size, wheel_x=a.wheel_x, clothes=a.clothes,
+                              wheel_fit=a.wheel_fit, pose=a.pose, body=a.body,
+                              orient='manual' if (a.yaw or a.tilt != 'none') else 'auto')
+        path = gm.model(key)['path']
+        comps = {k: gm.model_bytes(k) for k in convert.companions_needed(path)}
+        comps = {k: v for k, v in comps.items() if v}
+        payload, stats = convert.convert(path, gm.original_model_bytes(key), parts, mats, st, companions=comps)
+        extra = {k: convert.blank_model(k, comps[k]) for k in stats.get('hide', [])}
+        for line in gm.install(key, payload, dict(glb=os.path.basename(a.glb), settings=st.to_dict(), stats=stats), extra=extra):
+            print(line)
+        return 0
+    if a.cmd == 'export':
+        key = resolve(a.model)
+        om = mod.Model(gm.original_model_bytes(key))
+        export.export(gm.model(key)['path'], om, gm.original_textures(key, om, 1024), a.out)
+        print('saved', a.out)
+        return 0
+    if a.cmd == 'restore':
+        out = gm.remove_all() if a.all else gm.remove(resolve(a.model or ''))
+        for line in out:
+            print(line)
+        return 0
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
