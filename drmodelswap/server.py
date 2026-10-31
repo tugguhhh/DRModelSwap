@@ -166,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
                 g = S.game
                 prog = g.progress if g else (0, 0, '')
                 return self._send(200, dict(version=__version__, game=g.dir if g else '', scanning=S.scanning, scan_error=S.scan_error,
-                                            progress=list(prog), models=len(g.models) if g else 0,
+                                            progress=list(prog), models=len(g.models) if g else 0, coop=bool(g) and game.has_coop_mod(g.dir),
                                             swaps=g.manifest() if g else {}, detected=detect_game_dirs(),
                                             glb=S.glb[3] | dict(file=S.glb[0]) if S.glb else None,
                                             pending=dict(key=S.pending[0], stats=S.pending[2]) if S.pending else None))

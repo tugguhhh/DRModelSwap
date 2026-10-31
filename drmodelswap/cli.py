@@ -33,6 +33,7 @@ def main(argv=None):
     sw.add_argument('--clothes', default='default', choices=['default', 'keep'], help='Frank: hide his starting clothes')
     sw.add_argument('--wheel-fit', default='axles', choices=['axles', 'model'], help='vehicles: wheels onto the game axles, or game wheel bones moved to your wheels (test)')
     sw.add_argument('--pose', default='auto', choices=['auto', 'as_is'], help='characters: straighten A-pose models to the T-pose')
+    sw.add_argument('--seats', default=None, choices=['fit', 'auto', 'game'], help='vehicles: fit = move the model so its driver seat is where the game seats Frank (any game); auto = riders drawn in your model\'s seats by the co-op mod; game = as the original. Default: auto with the co-op mod installed, else fit')
     sw.add_argument('--body', default='fit', choices=['fit', 'as_is'], help='characters: fit legs and arms onto the game skeleton\'s joints')
     ex = sub.add_parser('export', help='save a game model as .glb (a reference to build on in Blender)')
     ex.add_argument('game')
@@ -69,6 +70,7 @@ def main(argv=None):
         st = convert.Settings(yaw=a.yaw, tilt=a.tilt, size=a.size, scale=a.scale, place=a.place, max_texture=a.max_texture, max_vertices=a.max_vertices,
                               wheels=a.wheels, wheel_size=a.wheel_size, wheel_x=a.wheel_x, clothes=a.clothes,
                               wheel_fit=a.wheel_fit, pose=a.pose, body=a.body,
+                              seats=a.seats or ('auto' if game.has_coop_mod(gm.dir) else 'fit'),
                               orient='manual' if (a.yaw or a.tilt != 'none') else 'auto')
         path = gm.model(key)['path']
         comps = {k: gm.model_bytes(k) for k in convert.companions_needed(path)}

@@ -33,7 +33,8 @@ class Settings:
                                #  bones move to them (experimental: depends on how the game places wheels)
     pose: str = 'auto'         # characters: 'auto' = arms/legs straightened to the game's T-pose if needed, 'as_is' = no change
     body: str = 'fit'          # characters: 'fit' = legs / arms fitted onto the game's joints, 'as_is' = only scaled to the height
-    seats: str = 'auto'        # vehicles: 'auto' = find the model's seats (riders drawn there by the co-op mod), 'game' = as the original
+    seats: str = 'auto'        # vehicles: 'auto' = find the model's seats (riders drawn there by the co-op mod), 'fit' = move the
+                               # model so its driver seat is where the game seats Frank (no mod needed), 'game' = as the original
     seat_x: float = 0.0        # driver seat moved by hand (game units: +X left, +Y up, +Z forward), on top of what was found
     seat_y: float = 0.0
     seat_z: float = 0.0
@@ -65,7 +66,7 @@ class Settings:
         s.wheel_fit = s.wheel_fit if s.wheel_fit in ('axles', 'model') else 'axles'
         s.pose = s.pose if s.pose in ('auto', 'as_is') else 'auto'
         s.body = s.body if s.body in ('fit', 'as_is') else 'fit'
-        s.seats = s.seats if s.seats in ('auto', 'game') else 'auto'
+        s.seats = s.seats if s.seats in ('auto', 'fit', 'game') else 'auto'
         for k in ('rot_x', 'rot_y', 'rot_z'):
             setattr(s, k, float(((getattr(s, k) + 180.0) % 360.0) - 180.0))
         for k in ('seat_x', 'seat_y', 'seat_z', 'pass_x', 'pass_y', 'pass_z'):
@@ -495,6 +496,8 @@ def prepare(model_path, om, parts, st, log, extra=()):
         Jl, Wl, vrep = vehicle.assign(ps, Pw, comps, plan, vr, dict(wheel_size=st.wheel_size, wheel_fit=st.wheel_fit), log)
         rep['vehicle'] = vrep
         rep['seats'] = _seats(model_path, ps, Pw, comps, vr, st, log)
+        if st.seats == 'fit' and rep['seats']:
+            _fit_seat(rep['seats'], Pw, Jl, vrep, om, log)
         if vrep.get('bone_moves'):
             rep['bones'] = rig.moved_bones(om, vrep['bone_moves'])
             far = max(np.linalg.norm(v) for v in vrep['bone_moves'].values())
@@ -517,6 +520,13 @@ def prepare(model_path, om, parts, st, log, extra=()):
             log('  %d extra wheel(s) on another axle stay fixed (the game vehicle has no bone for them)' % vrep['static'])
         for role, n in vrep['parts'].items():
             log('  %s: %d piece(s) move with the game\'s %s' % (role.replace('_', ' '), n, role.replace('_', ' ')))
+    elif kind == 'vehicle' or (kind == 'rigid' and seats.game_seat(model_path) is not None and rig.is_vehicle(model_path, om)):
+        # no wheels of yours (or wheels off): the model moves as one piece, but the riders still need a seat
+        if kind == 'rigid':
+            vr, comps = rig.VehicleRig(model_path, om), []
+        rep['seats'] = _seats(model_path, ps, Pw, comps or [], vr, st, log)
+        if st.seats == 'fit' and rep['seats']:
+            _fit_seat(rep['seats'], Pw, None, {}, om, log)
     out = []
     for i, p in enumerate(ps):
         n = len(Pw[i])
@@ -572,7 +582,7 @@ def _seats(model_path, ps, Pw, comps, vr, st, log):
     gp = g.copy() if bike else g * [-1, 1, 1]          # the game's passenger: mirrored (bikes: the co-op mod's rule too)
     d = p = None
     how = 'as in the original'
-    if st.seats == 'auto':
+    if st.seats in ('auto', 'fit'):
         # 1. a steering wheel / handlebar named in the model: the driver sits where he can hold it, as in the original
         spec = vr.spec or {}
         gb = spec.get('steering_wheel', spec.get('handlebar'))
@@ -617,19 +627,70 @@ def _seats(model_path, ps, Pw, comps, vr, st, log):
                 p = sp.pos
     if d is None:
         d = g.copy()
-        if st.seats == 'auto':
+        if st.seats in ('auto', 'fit'):
             log('Seats: none found in your model, the riders sit as in the original (move them with the Seat controls).')
     if p is None:
         p = d.copy() if bike else d * [-1, 1, 1]
     d = d + [st.seat_x, st.seat_y, st.seat_z]
     p = p + [st.pass_x, st.pass_y, st.pass_z]
     move_d, move_p = d - g, p - gp
-    if st.seats == 'auto' or any([st.seat_x, st.seat_y, st.seat_z, st.pass_x, st.pass_y, st.pass_z]):
+    if st.seats == 'auto' or (st.seats == 'game' and any([st.seat_x, st.seat_y, st.seat_z, st.pass_x, st.pass_y, st.pass_z])):
         log('Seats (%s): driver moved %.0f, passenger %.0f from the original seats. The co-op mod draws the riders there.'
             % (how, np.linalg.norm(move_d), np.linalg.norm(move_p)))
     return dict(driver=[round(float(x), 2) for x in d], passenger=[round(float(x), 2) for x in p],
                 driver_move=[round(float(x), 2) for x in move_d], passenger_move=[round(float(x), 2) for x in move_p],
                 game_driver=[float(x) for x in g], game_passenger=[float(x) for x in gp], how=how)
+
+
+# how far 'fit' may move the model to put its driver seat where the game seats Frank: sideways / front-back and up-down
+# (the game's wheels, collision and ground stay where they are, so a big move would leave the body off its wheels)
+FIT_MAX_FLAT, FIT_MAX_UP = 80.0, 30.0
+
+
+def _fit_seat(st_seats, Pw, Jl, vrep, om, log):
+    """Seats 'fit': the game always seats Frank in the original's driver seat, so the model is moved (all but the wheel
+    assemblies, which stay on the game's axles) until its driver seat is there. Works without any game mod. Changes Pw,
+    st_seats and vrep['bone_moves'] in place."""
+    d, g = np.array(st_seats['driver'], float), np.array(st_seats['game_driver'], float)
+    want = g - d
+    bones = rig.read_bones(om)
+    wheel = set()
+    if not vrep.get('bone_moves'):
+        # wheel assemblies: wheel bones and the bones above them up to (not including) the body
+        for w in vrep.get('wheels', []):
+            for b in w['bones']:
+                while b > 0:
+                    wheel.add(b)
+                    b = bones[b].parent
+    masks = [np.ones(len(q), bool) if Jl is None else ~np.isin(Jl[i][:, 0], list(wheel)) for i, q in enumerate(Pw)]
+    # down: as far as the body's clearance over the ground the wheels stand on (at least FIT_MAX_UP)
+    down = FIT_MAX_UP
+    wy = [q[~m, 1].min() for q, m in zip(Pw, masks) if (~m).any()]
+    by = [q[m, 1].min() for q, m in zip(Pw, masks) if m.any()]
+    if wy and by:
+        down = max(down, float(min(by) - min(wy)))
+    move = np.array([np.clip(want[0], -FIT_MAX_FLAT, FIT_MAX_FLAT), np.clip(want[1], -down, FIT_MAX_UP),
+                     np.clip(want[2], -FIT_MAX_FLAT, FIT_MAX_FLAT)])
+    log('Driver seat: %s.' % st_seats.get('how', ''))
+    if np.linalg.norm(move) < 0.5:
+        log('Seats (fit): your driver seat is already where the game seats Frank.')
+        return
+    for q, m in zip(Pw, masks):
+        q[m] += move
+    if vrep.get('bone_moves'):
+        # wheels kept where the model has them: they move with the body, and so do the game's wheel bones
+        vrep['bone_moves'] = {b: [float(x) for x in np.asarray(v, float) + move] for b, v in vrep['bone_moves'].items()}
+    for k in ('driver', 'passenger'):
+        st_seats[k] = [round(float(x), 2) for x in np.array(st_seats[k], float) + move]
+    st_seats['driver_move'] = [round(float(x), 2) for x in np.array(st_seats['driver'], float) - g]
+    st_seats['passenger_move'] = [round(float(x), 2) for x in np.array(st_seats['passenger'], float) - np.array(st_seats['game_passenger'], float)]
+    st_seats['fit_move'] = [round(float(x), 2) for x in move]
+    left = np.linalg.norm(want - move)
+    log('Seats (fit): your model moved %.0f to the side, %.0f %s, %.0f %s, so its driver seat is where the game seats '
+        'Frank%s. The wheels stay on the game\'s axles.' % (
+            abs(move[0]), abs(move[1]), 'up' if move[1] >= 0 else 'down', abs(move[2]),
+            'forward' if move[2] >= 0 else 'back',
+            '' if left < 1 else ' as far as allowed: he still sits %.0f away from it (Scale, or a smaller model, brings them closer)' % left))
 
 
 def _wheel_hint(ps, st, n_game):

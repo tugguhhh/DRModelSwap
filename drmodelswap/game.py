@@ -31,6 +31,12 @@ def find_game_dir(path):
     return p
 
 
+def has_coop_mod(game_dir):
+    """The Dead Rising co-op mod is installed (it reads DRModelSwap\\seats.txt and draws the riders in a swapped vehicle's
+    own seats)."""
+    return os.path.isfile(os.path.join(game_dir, 'coop_probe.dll'))
+
+
 class Game:
     def __init__(self, path):
         self.dir = find_game_dir(path)

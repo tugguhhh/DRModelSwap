@@ -124,7 +124,7 @@ main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100v
       <label class="veh">Wheel position</label><div class="seg veh" id="wheel_fit"><button data-v="axles">On the game's axles</button><button data-v="model">Where my model has them (test)</button><span class="hint" style="margin-left:6px">"test": the game's wheel bones are moved to your wheels instead; whether the game keeps them there needs a try in the game</span></div>
       <label class="veh">Wheel size</label><div class="seg veh" id="wheel_size"><button data-v="game">The game's (touch the ground)</button><button data-v="mine">Mine</button></div>
       <label class="veh">Wheels sideways</label><div class="seg veh" id="wheel_x"><button data-v="mine">Where they are</button><button data-v="game">The game's track width (body stretched)</button></div>
-      <label class="veh">Riders</label><div class="seg veh" id="seats"><button data-v="auto">In my model's seats</button><button data-v="game">Where the original's are</button><span class="hint" style="margin-left:6px">blue = driver, pink = passenger in the preview. The co-op mod draws both players there (it needs v31i or newer)</span></div>
+      <label class="veh">Riders</label><div class="seg veh" id="seats"><button data-v="fit">Fit my model to Frank's seat</button><button data-v="auto">Riders in my model's seats (co-op mod)</button><button data-v="game">Where the original's are</button><span class="hint" style="margin-left:6px">blue = driver, pink = passenger in the preview. <b>Fit</b> moves your model so its driver seat is where the game seats Frank: works in any game. <b>Co-op mod</b> keeps your model in place and draws both players in its seats (needs the Dead Rising co-op mod v31i or newer)</span></div>
       <label class="veh">Driver seat</label><div class="veh seatrow" data-k="seat"></div>
       <label class="veh">Passenger seat</label><div class="veh seatrow" data-k="pass"></div>
       <label class="frank">Frank's clothes</label><div class="seg frank" id="clothes"><button data-v="default">Hide his starting clothes</button><button data-v="keep">Keep them on</button></div>
@@ -231,7 +231,7 @@ function choose(key) {
   document.querySelectorAll('#main .frank').forEach(e => e.style.display = frank ? '' : 'none');
   // each game model keeps its own settings; a new one starts from its kind's defaults (nothing carries over)
   Object.assign(settings, {orient: 'auto', yaw: 0, tilt: 'none', scale: 1, place: 'ground', size: veh ? 'wheels' : chr ? 'height' : 'long',
-    seats: 'auto', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0, pose: 'auto', body: 'fit', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0});
+    seats: st && st.coop ? 'auto' : 'fit', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0, pose: 'auto', body: 'fit', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0});
   if (settingsByKey[key]) Object.assign(settings, JSON.parse(settingsByKey[key]));
   wire();
   // the file this game model was given (earlier now, or the one its installed swap was made from)
