@@ -1,0 +1,30 @@
+# Builds DRModelSwap.exe on Windows for every tag (v*) and on manual runs; the exe is attached to the run
+# (and to the GitHub release for tags).
+name: build
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python tests/make_test_glb.py tests/testvan.glb
+      - run: python tests/make_test_car.py tests
+      - run: python -c "import drmodelswap.glb as g; p,m,i=g.load(open('tests/testvan.glb','rb').read()); print(i)"
+      - run: pyinstaller --onefile --console --name DRModelSwap --add-data "drmodelswap/web;drmodelswap/web" DRModelSwap.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DRModelSwap
+          path: dist/DRModelSwap.exe
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/DRModelSwap.exe
