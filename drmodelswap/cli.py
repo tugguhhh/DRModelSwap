@@ -34,6 +34,13 @@ def main(argv=None):
     sw.add_argument('--wheel-fit', default='axles', choices=['axles', 'model'], help='vehicles: wheels onto the game axles, or game wheel bones moved to your wheels (test)')
     sw.add_argument('--pose', default='auto', choices=['auto', 'as_is'], help='characters: straighten A-pose models to the T-pose')
     sw.add_argument('--seats', default=None, choices=['fit', 'auto', 'game'], help='vehicles: fit = move the model so its driver seat is where the game seats Frank (any game); auto = riders drawn in your model\'s seats by the co-op mod; game = as the original. Default: auto with the co-op mod installed, else fit')
+    sw.add_argument('--faces', default='fix', choices=['fix', 'both', 'as_is'], help='fix = inside-out faces turned round (they\'d be holes in the game); both = every face drawn from both sides')
+    sw.add_argument('--grip', default='auto', choices=['auto', 'box'], help='hand-held items: auto = a handle found goes in Frank\'s hand; box = fill the original\'s space')
+    sw.add_argument('--hold', type=float, nargs=3, default=[0.0, 0.0, 0.0], metavar=('X', 'Y', 'Z'), help='hand-held items: move it in the hand (game units: sideways, up, forward)')
+    sw.add_argument('--crotch', type=float, default=0.0, help='characters: where the legs part, %% of the height (0 = automatic)')
+    sw.add_argument('--webs', default='split', choices=['split', 'keep'], help='characters: cut cloth that joins the two legs down the middle')
+    sw.add_argument('--limbs', default='own_side', choices=['own_side', 'nearest'], help='characters: legs and arms take weights only from their own side')
+    sw.add_argument('--lods', default='auto', choices=['auto', 'full', 'thin'], help='zombies: what is drawn far away')
     sw.add_argument('--body', default='fit', choices=['fit', 'as_is'], help='characters: fit legs and arms onto the game skeleton\'s joints')
     ex = sub.add_parser('export', help='save a game model as .glb (a reference to build on in Blender)')
     ex.add_argument('game')
@@ -69,13 +76,16 @@ def main(argv=None):
             print('  not found (drawn in plain colour): ' + ', '.join(info['missing']))
         st = convert.Settings(yaw=a.yaw, tilt=a.tilt, size=a.size, scale=a.scale, place=a.place, max_texture=a.max_texture, max_vertices=a.max_vertices,
                               wheels=a.wheels, wheel_size=a.wheel_size, wheel_x=a.wheel_x, clothes=a.clothes,
-                              wheel_fit=a.wheel_fit, pose=a.pose, body=a.body,
+                              wheel_fit=a.wheel_fit, pose=a.pose, body=a.body, faces=a.faces, grip=a.grip, hold_x=a.hold[0], hold_y=a.hold[1],
+                              hold_z=a.hold[2], crotch=a.crotch, webs=a.webs, limbs=a.limbs, lods=a.lods,
                               seats=a.seats or ('auto' if game.has_coop_mod(gm.dir) else 'fit'),
                               orient='manual' if (a.yaw or a.tilt != 'none') else 'auto')
         path = gm.model(key)['path']
         comps = {k: gm.model_bytes(k) for k in convert.companions_needed(path)}
         comps = {k: v for k, v in comps.items() if v}
         payload, stats = convert.convert(path, gm.original_model_bytes(key), parts, mats, st, companions=comps)
+        for pb in stats.get('problems', []):
+            print('[%s] %s%s' % (pb['level'], pb['text'], (' (try: ' + '; '.join('--%s %s' % (f['setting'].replace('_', '-'), f['value']) for f in pb['fixes']) + ')') if pb['fixes'] else ''))
         extra = {k: convert.blank_model(k, comps[k]) for k in stats.get('hide', [])}
         for line in gm.install(key, payload, dict(glb=os.path.basename(a.glb), settings=st.to_dict(), stats=stats), extra=extra):
             print(line)

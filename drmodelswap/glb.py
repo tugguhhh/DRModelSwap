@@ -230,7 +230,8 @@ def _load(js, chunk, resolve):
             if src is not None:
                 img = _image(js, bin_, src, resolve, missing)
         f = pbr.get('baseColorFactor', m.get('extensions', {}).get('KHR_materials_pbrSpecularGlossiness', {}).get('diffuseFactor', [1, 1, 1, 1]))
-        mats.append(dict(name=m.get('name', ''), image=img, colour=[float(max(0.0, min(1.0, c))) ** (1 / 2.2) for c in list(f)[:3]]))  # linear -> sRGB
+        mats.append(dict(name=m.get('name', ''), image=img, colour=[float(max(0.0, min(1.0, c))) ** (1 / 2.2) for c in list(f)[:3]],  # linear -> sRGB
+                         double_sided=bool(m.get('doubleSided'))))
     info = dict(meshes=len(js.get('meshes', [])), materials=len(mats), vertices=sum(len(p[1]) for p in parts),
                 triangles=sum(len(p[4]) for p in parts), skinned=bool(js.get('skins')), animations=len(js.get('animations', [])),
                 missing=sorted(set(missing)))

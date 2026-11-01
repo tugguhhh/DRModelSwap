@@ -246,9 +246,33 @@ def _seal_seams(P, J, W, J0, W0, rigid, tol):
     W[rows] = tw
 
 
-def transfer_weights(body, P, k=6, T=None, smooth=2):
+RIGHT_LEG, LEFT_LEG = (1, 2, 3), (4, 5, 6)
+RIGHT_ARM, LEFT_ARM = (11, 12, 13, 14, 20), (15, 16, 17, 18)
+
+
+def _side_mask(P, nb, sides):
+    """1 where a bone may move a point, 0 where it may not: below the crotch a point on the right (-X) of the middle
+    follows only the right leg, and so on; out past the shoulders, only that side's arm. Wide trousers or long sleeves
+    are nearer the other leg or the body in places: without this they'd be stretched across when the legs move."""
+    crotch_y, shoulder_x, cx = sides
+    M = np.ones((len(P), nb))
+    legs = P[:, 1] < crotch_y
+    for side, other in ((P[:, 0] < cx, LEFT_LEG), (P[:, 0] >= cx, RIGHT_LEG)):
+        for b in other:
+            if b < nb:
+                M[legs & side, b] = 0
+    arms = ~legs & (np.abs(P[:, 0] - cx) > shoulder_x)
+    for side, other in ((P[:, 0] < cx, LEFT_ARM), (P[:, 0] >= cx, RIGHT_ARM)):
+        for b in other:
+            if b < nb:
+                M[arms & side, b] = 0
+    return M
+
+
+def transfer_weights(body, P, k=6, T=None, smooth=2, sides=None):
     """Bone weights for points P from the k nearest original vertices (inverse-distance blend), then smoothed along
-    the new mesh's edges (T: triangles over P) so single vertices can't pick up a stray bone. -> (J n x 4, W n x 4)."""
+    the new mesh's edges (T: triangles over P) so single vertices can't pick up a stray bone. sides = (crotch height,
+    shoulder half-width, middle x): legs and arms keep to their own side (_side_mask). -> (J n x 4, W n x 4)."""
     I, D = nearest(P, body.P, k)
     w = 1.0 / np.maximum(D, 0.5) ** 2
     nb = len(body.bones)
@@ -263,6 +287,11 @@ def transfer_weights(body, P, k=6, T=None, smooth=2):
         if b < nb:
             acc[:, 10] += acc[:, b]
             acc[:, b] = 0
+    SM = _side_mask(P, nb, sides) if sides is not None and nb >= 19 else None
+    if SM is not None:
+        keep = acc * SM
+        # a point whose only weights were on the wrong side keeps them (better than none)
+        acc = np.where(keep.sum(1, keepdims=True) > 1e-9, keep, acc)
     acc /= np.maximum(acc.sum(1, keepdims=True), 1e-12)
     if T is not None and len(T) and smooth:
         # vertices at the same spot (UV seams) are one: weld, then average with the neighbours (half own, half theirs)
@@ -284,6 +313,10 @@ def transfer_weights(body, P, k=6, T=None, smooth=2):
             np.add.at(nb_sum, e[:, 1], Aw[e[:, 0]])
             Aw = np.where(deg > 0, 0.5 * Aw + 0.5 * nb_sum / np.maximum(deg, 1), Aw)
         acc = Aw[wid]
+        if SM is not None:
+            keep = acc * SM
+            acc = np.where(keep.sum(1, keepdims=True) > 1e-9, keep, acc)
+            acc /= np.maximum(acc.sum(1, keepdims=True), 1e-12)
     top = np.argsort(-acc, axis=1)[:, :4]
     tw = np.take_along_axis(acc, top, 1)
     tw[tw < 0.04 * tw[:, :1]] = 0          # drop tiny influences
@@ -298,6 +331,38 @@ def regions_for(body, P, T):
     C = P[T].mean(1)
     I, _ = nearest(C, src, 1)
     return [body.regions[int(g)] for g in grp[I[:, 0]]]
+
+
+def groups_for(body, P, T, reach=0.04, share=0.3):
+    """Display groups of every triangle. The game shows different groups on different zombies (long or short sleeves,
+    trousers or shorts, bare arms...): a triangle drawn only in the groups of the nearest original body part vanishes
+    on zombies that switch that part off, leaving holes in arms and legs. So a body part's triangles are also drawn in
+    the groups of every other part that covers the same place (a long-sleeved shirt over the bare arms: the arms'
+    triangles are drawn with the shirts too), and some group there is always on. reach: share of the height;
+    share: how much of a part another must cover to count."""
+    if len(T) == 0:
+        return []
+    base = regions_for(body, P, T)
+    cover = getattr(body, '_cover', None)
+    if cover is None:
+        r = reach * float(body.hi[1] - body.lo[1])
+        regs = sorted(set(body.regions.values()))
+        rv = np.array([regs.index(body.regions[int(g)]) for g in body.vgroup])
+        cover = {}
+        for i, R in enumerate(regs):
+            mine = np.nonzero(rv == i)[0]
+            others = np.nonzero(rv != i)[0]
+            gs = set(R)
+            if len(mine) and len(others):
+                sample = mine[::max(1, len(mine) // 500)]
+                I, D = nearest(body.P[sample], body.P[others], 1)
+                hit = rv[others[I[:, 0]]][D[:, 0] <= r]
+                for j, c in zip(*np.unique(hit, return_counts=True)):
+                    if c >= share * len(sample):
+                        gs.update(regs[int(j)])
+            cover[R] = tuple(sorted(gs))
+        body._cover = cover
+    return [cover.get(b, b) for b in base]
 
 
 def fit(P_all, body, st):
@@ -476,9 +541,51 @@ class Landmarks:
         return 'Landmarks(%s)' % ', '.join('%s=%s' % (k, np.round(np.asarray(getattr(self, k), float), 1)) for k in self.__slots__)
 
 
-def landmarks(SN, crotch_frac=None):
+def _legs_apart(P, T, ys, H):
+    """For each height in ys: have the legs parted there? Exact, from the triangles: the cross-section at that height
+    has a gap near the middle of the lower body with something on both sides of it. (Surface samples miss a narrow gap
+    between baggy trousers; the bounding box's middle is off when one arm reaches further than the other.)"""
+    tri = P[T]
+    low = P[:, 1] < P[:, 1].min() + 0.4 * H
+    c = float((P[low, 0].min() + P[low, 0].max()) / 2) if low.any() else float(np.median(P[:, 0]))
+    zone = 0.06 * H
+    out = np.zeros(len(ys), bool)
+    ylo, yhi = tri[:, :, 1].min(1), tri[:, :, 1].max(1)
+    for i, yv in enumerate(ys):
+        m = (ylo <= yv) & (yhi >= yv)
+        if not m.any():
+            continue
+        t = tri[m]
+        xs = []
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            pa, pb = t[:, a], t[:, b]
+            dy = pb[:, 1] - pa[:, 1]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                f = (yv - pa[:, 1]) / dy
+                ok = (dy != 0) & (f >= 0) & (f <= 1)
+                xs.append(np.where(ok, pa[:, 0] + f * (pb[:, 0] - pa[:, 0]), np.nan))
+        xs = np.stack(xs, 1)
+        lo = np.min(np.where(np.isnan(xs), np.inf, xs), 1)
+        hi = np.max(np.where(np.isnan(xs), -np.inf, xs), 1)
+        ok = np.isfinite(lo) & np.isfinite(hi) & (hi >= c - 3 * zone) & (lo <= c + 3 * zone)
+        if not ok.any():
+            continue
+        order = np.argsort(lo[ok])
+        L, R = lo[ok][order], hi[ok][order]
+        reach = R[0]
+        for k in range(1, len(L)):
+            # a gap between what's covered so far and the next piece, inside the middle zone
+            if L[k] > reach + 0.002 * H and reach > c - zone and L[k] < c + zone:
+                out[i] = True
+                break
+            reach = max(reach, R[k])
+    return out
+
+
+def landmarks(SN, crotch_frac=None, mesh=None, crotch_at=None):
     """Measure a standing T-pose body from surface samples SN (point + normal; Y up, X sideways, centred). pit / tip /
-    leg_x / arm_* are per side: index 0 = right (-X), 1 = left (+X)."""
+    leg_x / arm_* are per side: index 0 = right (-X), 1 = left (+X). mesh = (P, T): the crotch is found from the
+    triangles (more reliable); crotch_at = the crotch height as a share of the height, set by hand."""
     L = Landmarks()
     S, Nn = SN[:, :3], SN[:, 3:]
     y, x = S[:, 1], S[:, 0]
@@ -500,6 +607,18 @@ def landmarks(SN, crotch_frac=None):
         if not (strip & (y >= yb - step) & (y < yb)).any() and not (strip & (y >= yb - 2 * step) & (y < yb - step)).any():
             L.crotch, L.crotch_found = float(yb), True
             break
+    if mesh is not None and len(mesh[1]):
+        # the triangles see a narrow gap the samples miss (baggy trousers); the samples see past thighs that touch
+        # (their sideways-facing surfaces are ignored): the higher of the two is where the legs part
+        ys = np.arange(L.floor + 0.7 * H, L.floor + 0.12 * H, -step)
+        apart = _legs_apart(mesh[0], mesh[1], ys, H)
+        for i in range(len(ys) - 1):
+            if apart[i] and apart[i + 1]:
+                if not L.crotch_found or ys[i] > L.crotch:
+                    L.crotch, L.crotch_found = float(ys[i]), True
+                break
+    if crotch_at:
+        L.crotch, L.crotch_found = L.floor + float(crotch_at) * H, True
     # arms (T-pose): the outer part of each side, its height and thickness; armpit = how far the body below reaches
     L.pit, L.tip, L.arm_y, L.arm_z, L.arm_r, L.leg_x = [], [], [], [], [], []
     up = y > L.crotch
@@ -618,3 +737,142 @@ class Proportions:
         if not u.crotch_found:
             out.append('(couldn\'t see where the legs part: assumed)')
         return ', '.join(out)
+
+
+# ----- stretch check: the model bent in a few test poses (walking, elbows bent, crouching); a triangle whose sides get
+# much longer than they are standing shows as a stretched, smeared patch in the game. Found ahead, shown in the preview.
+
+TEST_POSES = {
+    'walking': {12: rig.rot_z(70) @ rig.rot_y(25), 16: rig.rot_z(-70) @ rig.rot_y(25), 1: rig.rot_x(-30), 2: rig.rot_x(20), 4: rig.rot_x(25),
+                5: rig.rot_x(45)},
+    'elbows bent': {12: rig.rot_z(60), 16: rig.rot_z(-60), 13: rig.rot_y(-90), 17: rig.rot_y(90)},
+    'crouching': {1: rig.rot_x(-70), 2: rig.rot_x(100), 4: rig.rot_x(-70), 5: rig.rot_x(100), 12: rig.rot_z(50), 16: rig.rot_z(-50),
+                  7: rig.rot_x(20)},
+    'head turned': {10: rig.rot_y(50), 9: rig.rot_x(20)},
+}
+JOINTS = {0: 'hips', 1: 'right hip', 2: 'right knee', 3: 'right ankle', 4: 'left hip', 5: 'left knee', 6: 'left ankle',
+          7: 'waist', 8: 'chest', 9: 'neck', 10: 'neck', 11: 'right collarbone', 12: 'right shoulder', 13: 'right elbow',
+          14: 'right wrist', 15: 'left collarbone', 16: 'left shoulder', 17: 'left elbow', 18: 'left wrist', 19: 'jaw',
+          20: 'right hand', 21: 'right eye', 22: 'left eye'}
+STRETCH_HOT = 2.0       # a side twice as long as standing
+
+
+def stretch_check(bones, P, T, J, W):
+    """-> (per-triangle worst stretch over the test poses, per-triangle joint (bone index) where it bends)."""
+    if len(T) == 0:
+        return np.zeros(0), np.zeros(0, np.int64)
+    e = np.r_[T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]]
+    l0 = np.linalg.norm(P[e[:, 0]] - P[e[:, 1]], axis=1)
+    small = max(float(np.median(l0)) * 0.05, 1e-6)
+    worst = np.zeros(len(T))
+    for pz in TEST_POSES.values():
+        S = rig.skin(P, J, W, bones, rig.world_matrices(bones, pz))
+        l1 = np.linalg.norm(S[e[:, 0]] - S[e[:, 1]], axis=1)
+        r = np.maximum(l1, small) / np.maximum(l0, small)
+        worst = np.maximum(worst, r.reshape(3, -1).max(0))
+    # the joint: of the bones the triangle's corners mostly follow, the one furthest down the skeleton
+    depth = np.zeros(len(bones), np.int64)
+    for b in bones:
+        depth[b.index] = 0 if b.parent < 0 else depth[b.parent] + 1
+    dom = J[np.arange(len(J)), np.argmax(W, 1)]
+    tb = dom[T]
+    joint = tb[np.arange(len(T)), np.argmax(depth[tb], 1)]
+    return worst, joint
+
+
+def stretch_summary(P, T, worst, joint, base_share=0.0):
+    """-> (share of the surface that stretches a lot, [(joint name, share)] worst first, hot vertex flags)."""
+    if len(T) == 0:
+        return 0.0, [], np.zeros(len(P), bool)
+    a = _area(P, T)
+    tot = max(float(a.sum()), 1e-12)
+    hot = worst > STRETCH_HOT
+    by = {}
+    for j, ar in zip(joint[hot], a[hot]):
+        n = JOINTS.get(int(j), 'bone %d' % j)
+        by[n] = by.get(n, 0.0) + float(ar) / tot
+    flags = np.zeros(len(P), bool)
+    flags[T[hot].ravel()] = True
+    return float(a[hot].sum()) / tot, sorted(by.items(), key=lambda x: -x[1]), flags
+
+
+def split_between_legs(part, crotch_y, cx=0.0):
+    """Triangles below the crotch that cross the body's middle join the two legs (a web of trousers or a robe between
+    them): any rig stretches them across when the legs move apart. They are cut along the middle (x = cx), each half
+    goes with its own leg, so the web opens like a split skirt instead. part: a part dict (P, N, UV, T and other
+    per-vertex arrays). -> (new part, number of triangles cut)."""
+    P, T = part['P'], part['T']
+    if len(T) == 0:
+        return part, 0
+    tri = P[T]
+    side = tri[:, :, 0] >= cx
+    below = tri[:, :, 1].max(1) < crotch_y
+    cross = below & side.any(1) & ~side.all(1)
+    if not cross.any():
+        return part, 0
+    per_vertex = [k for k, v in part.items() if isinstance(v, np.ndarray) and len(v) == len(P) and k != 'T']
+    new = {k: [part[k]] for k in per_vertex}
+    nv = len(P)
+    out_T = [T[~cross]]
+    eps = 1e-3
+
+    def add(i, j, f, sgn):
+        """a new vertex on edge i-j at fraction f, nudged to one side of the cut"""
+        nonlocal nv
+        for k in per_vertex:
+            a, b = part[k][i], part[k][j]
+            if np.issubdtype(part[k].dtype, np.floating):
+                v = a + f * (b - a)
+                if k == 'P':
+                    v = v.copy()
+                    v[0] = cx + sgn * eps
+                elif k == 'N':
+                    v = v / max(float(np.linalg.norm(v)), 1e-9)
+            else:
+                v = a if f < 0.5 else b
+            new[k].append(np.asarray(v)[None])
+        nv += 1
+        return nv - 1
+
+    for t in T[cross]:
+        s = P[t, 0] >= cx
+        # rotate so the lone corner (the one on its own side) comes first
+        lone = int(np.nonzero(s != (s.sum() >= 2))[0][0])
+        a, b, c = t[lone], t[(lone + 1) % 3], t[(lone + 2) % 3]
+        sa = 1.0 if P[a, 0] >= cx else -1.0
+        fab = (cx - P[a, 0]) / (P[b, 0] - P[a, 0])
+        fac = (cx - P[a, 0]) / (P[c, 0] - P[a, 0])
+        # the lone corner's side: one triangle; the other side: two
+        ab1, ac1 = add(a, b, fab, sa), add(a, c, fac, sa)
+        ab2, ac2 = add(a, b, fab, -sa), add(a, c, fac, -sa)
+        out_T.append(np.array([[a, ab1, ac1], [ab2, b, c], [ab2, c, ac2]], np.int64))
+    q = dict(part)
+    for k in per_vertex:
+        q[k] = np.concatenate(new[k])
+    q['T'] = np.concatenate(out_T).astype(np.int64)
+    return q, int(cross.sum())
+
+
+def model_stretch(m):
+    """stretch_check on a built game model (its nearest level of detail; each triangle once). -> (share of the surface
+    stretched a lot, [(joint, share)], per-vertex hot flags)."""
+    bones = rig.read_bones(m)
+    P, _, _ = m.vertices()
+    J, W = rig.vertex_weights(m)
+    idx = m.indices()
+    near = min((p['flags'][1] for p in m.pieces), default=15)
+    near_bit = near & -near
+    seen, Ts = set(), []
+    for p in m.pieces:
+        k = (p['first_index'], p['indices'])
+        if k in seen or not (p['flags'][1] & near_bit):
+            continue
+        seen.add(k)
+        t = np.array(m.triangles(p, idx), np.int64).reshape(-1, 3)
+        if len(t):
+            Ts.append(t)
+    if not Ts:
+        return 0.0, [], np.zeros(len(P), bool)
+    T = np.concatenate(Ts)
+    worst, joint = stretch_check(bones, P, T, J, W)
+    return stretch_summary(P, T, worst, joint)

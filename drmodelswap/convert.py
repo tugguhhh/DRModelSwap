@@ -4,7 +4,7 @@ from dataclasses import dataclass, asdict, field, replace
 import numpy as np
 from PIL import Image
 
-from . import orient, pieces, seats, arc, character, mod, rig, tex, vehicle
+from . import checks, orient, pieces, seats, arc, character, mod, rig, tex, vehicle
 
 TILTS = {'none': np.eye(3),
          'x+90': np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], float),   # Z-up model -> Y-up
@@ -33,6 +33,15 @@ class Settings:
                                #  bones move to them (experimental: depends on how the game places wheels)
     pose: str = 'auto'         # characters: 'auto' = arms/legs straightened to the game's T-pose if needed, 'as_is' = no change
     body: str = 'fit'          # characters: 'fit' = legs / arms fitted onto the game's joints, 'as_is' = only scaled to the height
+    limbs: str = 'own_side'    # characters: 'own_side' = each leg / arm takes weights only from its own side's bones, 'nearest' = as found
+    grip: str = 'auto'         # hand-held items: 'auto' = a handle found goes in the hand, 'box' = fill the original's box
+    hold_x: float = 0.0        # hand-held items moved in the hand (game units: +X left, +Y up, +Z forward)
+    hold_y: float = 0.0
+    hold_z: float = 0.0
+    faces: str = 'fix'         # 'fix' = inside-out faces turned round (+ backs for open double-sided cloth), 'both' = every face two-sided, 'as_is'
+    webs: str = 'split'        # characters: 'split' = cloth joining the two legs is cut down the middle, 'keep'
+    crotch: float = 0.0        # characters: where the legs part, % of the height (0 = found automatically)
+    lods: str = 'auto'         # characters with levels of detail (zombies): 'auto', 'full' (whole model at every distance), 'thin'
     seats: str = 'auto'        # vehicles: 'auto' = find the model's seats (riders drawn there by the co-op mod), 'fit' = move the
                                # model so its driver seat is where the game seats Frank (no mod needed), 'game' = as the original
     seat_x: float = 0.0        # driver seat moved by hand (game units: +X left, +Y up, +Z forward), on top of what was found
@@ -67,10 +76,18 @@ class Settings:
         s.pose = s.pose if s.pose in ('auto', 'as_is') else 'auto'
         s.body = s.body if s.body in ('fit', 'as_is') else 'fit'
         s.seats = s.seats if s.seats in ('auto', 'fit', 'game') else 'auto'
+        s.lods = s.lods if s.lods in ('auto', 'full', 'thin') else 'auto'
+        s.limbs = s.limbs if s.limbs in ('own_side', 'nearest') else 'own_side'
+        s.webs = s.webs if s.webs in ('split', 'keep') else 'split'
+        s.faces = s.faces if s.faces in ('fix', 'both', 'as_is') else 'fix'
+        s.grip = s.grip if s.grip in ('auto', 'box') else 'auto'
+        for k in ('hold_x', 'hold_y', 'hold_z'):
+            setattr(s, k, float(min(200.0, max(-200.0, getattr(s, k)))))
         for k in ('rot_x', 'rot_y', 'rot_z'):
             setattr(s, k, float(((getattr(s, k) + 180.0) % 360.0) - 180.0))
         for k in ('seat_x', 'seat_y', 'seat_z', 'pass_x', 'pass_y', 'pass_z'):
             setattr(s, k, float(min(400.0, max(-400.0, getattr(s, k)))))
+        s.crotch = 0.0 if not s.crotch else float(min(70.0, max(20.0, s.crotch)))
         s.max_vertices = max(1000, min(65000, s.max_vertices))
         s.max_texture = max(64, min(2048, s.max_texture))
         s.scale = max(0.05, min(20.0, s.scale))
@@ -124,6 +141,30 @@ def _area(P, T):
     return float(np.linalg.norm(np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]]), axis=1).sum() / 2)
 
 
+def _side(N):
+    """Which of the 6 axis directions each normal is closest to (0..5): thinning merges only vertices facing alike."""
+    N = np.nan_to_num(np.asarray(N, float))
+    a = np.argmax(np.abs(N), 1)
+    return a * 2 + (N[np.arange(len(N)), a] < 0)
+
+
+def _keep_facing(P_old, T_old, P_new, T_new):
+    """After thinning: a triangle whose corners were merged can end up facing the other way (the game doesn't draw its
+    back, so it shows as a hole): turn those back to face like the triangle they came from, and drop repeats."""
+    if len(T_new) == 0:
+        return T_new
+    fo = np.cross(P_old[T_old[:, 1]] - P_old[T_old[:, 0]], P_old[T_old[:, 2]] - P_old[T_old[:, 0]])
+    fn = np.cross(P_new[T_new[:, 1]] - P_new[T_new[:, 0]], P_new[T_new[:, 2]] - P_new[T_new[:, 0]])
+    T_new = T_new.copy()
+    flip = (fo * fn).sum(1) < 0
+    T_new[flip] = T_new[flip][:, [0, 2, 1]]
+    # the same triangle twice (same corners, same way round) after merging: keep one
+    r = np.argmin(T_new, 1)
+    canon = np.stack([T_new[np.arange(len(T_new)), (r + k) % 3] for k in range(3)], 1)
+    _, first = np.unique(canon, axis=0, return_index=True)
+    return T_new[np.sort(first)]
+
+
 def cluster(P, N, UV, T, target):
     """Rough thinning: merge the vertices that fall in the same grid cell until at most `target` are left."""
     lo, hi = P.min(0), P.max(0)
@@ -131,7 +172,7 @@ def cluster(P, N, UV, T, target):
     cells = 512
     while True:
         q = np.floor((P - lo) / (ext / cells)).astype(np.int64)
-        key = (q[:, 0] * 1000003 + q[:, 1]) * 1000003 + q[:, 2]
+        key = ((q[:, 0] * 1000003 + q[:, 1]) * 1000003 + q[:, 2]) * 6 + _side(N)
         uk, inv = np.unique(key, return_inverse=True)
         if len(uk) <= target or cells < 8:
             break
@@ -148,7 +189,7 @@ def cluster(P, N, UV, T, target):
     first[inv[::-1]] = np.arange(len(P))[::-1]
     Pn /= np.maximum(cnt, 1)[:, None]
     Nn /= np.maximum(np.linalg.norm(Nn, axis=1, keepdims=True), 1e-9)
-    return Pn, Nn, UV[first], Tn
+    return Pn, Nn, UV[first], _keep_facing(P, T[keep], Pn, Tn)
 
 
 def _face_normals(P, T):
@@ -284,7 +325,9 @@ def _thin_part(p, target):
     cells = 512
     while True:
         q = np.floor((P - lo) / (ext / cells)).astype(np.int64)
-        key = ((q[:, 0] * 1000003 + q[:, 1]) * 1000003 + q[:, 2]) * 512 + p['J'][:, 0]   # never merge across bones (wheel / body)
+        # never merge across bones (wheel / body), nor the front and back of something thin (an arm's two sides
+        # merged make a folded surface that shows holes in the game)
+        key = (((q[:, 0] * 1000003 + q[:, 1]) * 1000003 + q[:, 2]) * 512 + p['J'][:, 0]) * 6 + _side(N)
         uk, inv = np.unique(key, return_inverse=True)
         if len(uk) <= target or cells < 8:
             break
@@ -300,7 +343,7 @@ def _thin_part(p, target):
     first[inv[::-1]] = np.arange(len(P))[::-1]
     Pn /= np.maximum(cnt, 1)[:, None]
     Nn /= np.maximum(np.linalg.norm(Nn, axis=1, keepdims=True), 1e-9)
-    return dict(p, P=Pn, N=Nn, UV=UV[first], T=Tn[keep], J=p['J'][first], W=p['W'][first])
+    return dict(p, P=Pn, N=Nn, UV=UV[first], T=_keep_facing(P, T[keep], Pn, Tn[keep]), J=p['J'][first], W=p['W'][first])
 
 
 def _thin_parts(parts, max_vertices, log):
@@ -350,6 +393,60 @@ def _height_cap(Q_all, om, k=1.15):
     return (k * float(om.box_max[1] - om.box_min[1]) / h) if h > 1e-9 else 1e9
 
 
+def _samples(Ps, Ts, n=20000):
+    off = np.cumsum([0] + [len(P) for P in Ps])
+    P = np.concatenate(Ps)
+    T = np.concatenate([np.asarray(T_) + o for T_, o in zip(Ts, off)]) if Ts else np.zeros((0, 3), np.int64)
+    return character.surface_samples(P, T, n)[:, :3] if len(T) else P
+
+
+def _original_hand(om):
+    """Where the grip-finder puts the hand on the original item (it should be at its origin; the difference is how
+    far off the finder is on this kind of item, which a similar new item is corrected by)."""
+    P, _, _ = om.vertices()
+    idx = om.indices()
+    Ts = [np.array(om.triangles(pc, idx), np.int64).reshape(-1, 3) for pc in om.pieces]
+    Ts = [t for t in Ts if len(t)]
+    g = checks.find_grip(_samples([P], [np.concatenate(Ts)])) if Ts else None
+    return g
+
+
+def _hold(ps, R, Q, s, t, om, st, log, rep):
+    """Hand-held items: the game holds an item at its origin. If the model has a handle (a gun), the top of the handle
+    goes in the hand and its front forwards; otherwise the model fills the original's box as it did. Then the Hold
+    controls move it in the hand. -> (R, Q, s, t), maybe turned and moved."""
+    info = dict(found=False)
+    if st.grip == 'auto' and st.place != 'origin':
+        def find(Q_, s_, t_):
+            return checks.find_grip(_samples([q * s_ + t_ for q in Q_], [p['T'] for p in ps]))
+        g = find(Q, s, t)
+        if g is not None and g['front'] < 0:
+            if st.orient == 'auto':
+                R = np.array([[-1.0, 0, 0], [0, 1.0, 0], [0, 0, -1.0]]) @ R
+                Q = [p['P'] @ R.T for p in ps]
+                s, t = _box_fit(np.concatenate(Q), om, st)
+                g = find(Q, s, t)
+                log('Hold: turned round so it points forwards (%s).' % (g or {}).get('why', 'its handle'))
+            else:
+                log('Hold: it seems to point backwards (%s): try Turn 180°.' % g['why'])
+        if g is not None and g['front'] > 0:
+            og = _original_hand(om)
+            target = og['hand'] if og is not None and np.linalg.norm(og['hand']) < 0.25 * float(np.ptp(om.box_max - om.box_min)) + 15 else np.zeros(3)
+            move = target - g['hand']
+            t = t + move
+            info = dict(found=True, hand=[round(float(x), 1) for x in g['hand'] + move], moved=round(float(np.linalg.norm(move)), 1))
+            log('Hold: found a handle; its top is put in Frank\'s hand (moved %.0f units)%s. Hold / Move in the hand '
+                'adjusts it.' % (info['moved'], ', matched to how the original is held' if og is not None else ''))
+        elif g is None:
+            log('Hold: no handle found, so it fills the original\'s space (blue box). If Frank should hold it somewhere '
+                'else, use Move in the hand (the red mark is his hand).')
+    if st.hold_x or st.hold_y or st.hold_z:
+        t = t + np.array([st.hold_x, st.hold_y, st.hold_z])
+        log('Hold: moved by hand %+.0f sideways, %+.0f up, %+.0f forward.' % (st.hold_x, st.hold_y, st.hold_z))
+    rep['hold'] = info
+    return R, Q, s, t
+
+
 def _box_fit(Q_all, om, st):
     """The original placement rules (size / place settings) -> (s, t) so that game position = s * Q + t."""
     lo, hi = Q_all.min(0), Q_all.max(0)
@@ -391,7 +488,87 @@ def _parts_in(parts):
     return out
 
 
-def prepare(model_path, om, parts, st, log, extra=()):
+def _reverse(p, rows, back=False):
+    """Part p with triangles `rows` turned the other way round (their vertices' normals too, where no other triangle
+    uses them). back=True: the turned copies are added (both sides drawn) instead."""
+    T = p['T']
+    if back:
+        n = len(p['P'])
+        used = np.unique(T[rows])
+        remap = np.full(n, -1)
+        remap[used] = n + np.arange(len(used))
+        q = dict(p, P=np.r_[p['P'], p['P'][used]], UV=np.r_[p['UV'], p['UV'][used]], vid=np.r_[p['vid'], p['vid'][used]],
+                 N=None if p['N'] is None else np.r_[p['N'], -p['N'][used]],
+                 T=np.r_[T, remap[T[rows]][:, [0, 2, 1]]])
+        if 'colors' in (p.get('info') or {}):
+            q['info'] = dict(p['info'], colors=np.r_[p['info']['colors'], p['info']['colors'][used]])
+        return q
+    T = T.copy()
+    T[rows] = T[rows][:, [0, 2, 1]]
+    N = p['N']
+    if N is not None:
+        only = np.zeros(len(p['P']), bool)
+        only[T[rows].ravel()] = True
+        only[T[~rows].ravel()] = False
+        N = N.copy()
+        N[only] = -N[only]
+    return dict(p, T=T, N=N)
+
+
+def _fix_faces(ps, st, mats, log, rep):
+    """The game draws only the front of each triangle. Faces turned inside out (they'd be holes in the game) are turned
+    round; thin open surfaces of a material marked double-sided (leaves, cloth, hair cards) get a back as well.
+    st.faces: 'fix' (that), 'both' (every triangle drawn from both sides), 'as_is'."""
+    if st.faces == 'as_is' or not ps:
+        return ps
+    if st.faces == 'both':
+        total = sum(len(p['P']) for p in ps)
+        out = [_reverse(p, np.ones(len(p['T']), bool), back=True) for p in ps]
+        rep['faces'] = dict(both=True)
+        log('Faces: every triangle is drawn from both sides (%d vertices -> %d).' % (total, sum(len(p['P']) for p in out)))
+        return out
+    off = np.cumsum([0] + [len(p['P']) for p in ps])
+    toff = np.cumsum([0] + [len(p['T']) for p in ps])
+    allP = np.concatenate([p['P'] for p in ps])
+    allT = np.concatenate([p['T'] + o for p, o in zip(ps, off)])
+    flip, r = checks.orient_faces(allP, allT)
+    out = []
+    for i, p in enumerate(ps):
+        rows = flip[toff[i]:toff[i + 1]]
+        out.append(_reverse(p, rows) if rows.any() else p)
+    if r['reversed']:
+        log('Faces: %d triangle(s) were facing inwards (%.1f%% of the surface; the game would show holes there): turned '
+            'round%s. (Faces: as in my file, to undo)' % (r['reversed'], 100 * r['area'],
+                                                         ', including %d piece(s) inside out' % r['inside_out'] if r['inside_out'] else ''))
+    # double-sided materials: open surfaces (a single layer of cloth, leaves, hair cards) get a back
+    budget = st.max_vertices * 0.9 - sum(len(p['P']) for p in out)
+    backed, skipped = 0, 0
+    for i, p in enumerate(out):
+        m = mats[p['mi']] if 0 <= p['mi'] < len(mats) else {}
+        if not m.get('double_sided') or not len(p['T']):
+            continue
+        w = checks._weld(p['P'])
+        W = np.sort(np.c_[w[p['T'][:, [0, 1]]], w[p['T'][:, [1, 2]]], w[p['T'][:, [2, 0]]]].reshape(-1, 2), 1)
+        _, cnt = np.unique(W, axis=0, return_counts=True)
+        if (cnt == 1).sum() < 0.1 * len(cnt):
+            continue                            # (nearly) closed: its inside is hardly seen, a back would only cost
+        if len(p['P']) > budget:
+            skipped += 1
+            continue
+        budget -= len(p['P'])
+        out[i] = _reverse(p, np.ones(len(p['T']), bool), back=True)
+        backed += 1
+    if backed:
+        log('Faces: %d open surface(s) of double-sided materials (single-layer cloth, leaves, hair) get a back so they show '
+            'from both sides.' % backed)
+    if skipped:
+        log('Faces: %d open double-sided surface(s) left one-sided (no vertices to spare): they may look see-through from '
+            'behind. Faces: both sides, with a bigger vertex budget, draws them.' % skipped)
+    rep['faces'] = dict(r, backed=backed, skipped=skipped)
+    return out
+
+
+def prepare(model_path, om, parts, st, log, extra=(), mats=None):
     """-> (placed part dicts with J/W/groups/lod, kind, report). Placement, rigging and LOD copies."""
     kind = 'rigid'
     if rig.is_character(om):
@@ -419,6 +596,7 @@ def prepare(model_path, om, parts, st, log, extra=()):
             ps = rest
             rep['removed'] += [dict(id=k, ids=[k], name=names.get(k, 'base'), found='remove', chosen=False) for k in base]
             log('Left out a flat base under the model (a ground plane or stand). To keep it, set it to something else in the Parts list.')
+    ps = _fix_faces(ps, st, mats or [], log, rep)
     if st.size == 'auto':
         from dataclasses import replace
         st = replace(st, size={'vehicle': 'wheels', 'character': 'height'}.get(kind, 'long'))
@@ -476,6 +654,8 @@ def prepare(model_path, om, parts, st, log, extra=()):
             sz = np.ptp(Qa, 0) * s
             osz = om.box_max - om.box_min
             log('Size: x%.2f of the original\'s length, x%.2f its width, x%.2f its height (Scale changes it)' % tuple(sz[[2, 0, 1]] / osz[[2, 0, 1]]))
+    if kind == 'rigid':
+        R, Q, s, t = _hold(ps, R, Q, s, t, om, st, log, rep)
     Pw = [q * s + t for q in Q]
     for i, p in enumerate(ps):
         p['N'] = _normals(Pw[i], p['N'], p['T'], R)
@@ -715,6 +895,13 @@ def _wheel_hint(ps, st, n_game):
             '(the yellow line is the front).')
 
 
+def _sides(body, rep):
+    """(crotch height, shoulder half-width, middle) of the game body: where legs and arms keep to their own side."""
+    Lg = rep.get('_landmarks', (None, None))[1] or character.game_landmarks(body)
+    sh = abs(body.bones[12].pivot[0]) if len(body.bones) > 16 else 20.0
+    return (Lg.crotch, sh, 0.0)
+
+
 def _character(parts, body, st, rep, log):
     allP = np.concatenate([p['P'] for p in parts])
     off = np.cumsum([0] + [len(p['P']) for p in parts])
@@ -736,7 +923,9 @@ def _character(parts, body, st, rep, log):
     if fit_body:
         # legs and height first: the pose check below compares arms at the game's shoulder height
         Lg = character.game_landmarks(body)
-        pre = character.Proportions(character.landmarks(character.surface_samples(allP, allT)), Lg, body.bones, arms=False)
+        Lpre = character.landmarks(character.surface_samples(allP, allT), mesh=(allP, allT), crotch_at=st.crotch / 100.0 if st.crotch else None)
+        pre = character.Proportions(Lpre, Lg, body.bones, arms=False)
+        rep['crotch'] = round(100.0 * (Lpre.crotch - Lpre.floor) / max(Lpre.top - Lpre.floor, 1e-9), 1)
         apply(lambda P, N: pre(P), pre.normals)
     if st.pose == 'auto':
         pose, found = character.estimate_pose(body, allP)
@@ -769,8 +958,22 @@ def _character(parts, body, st, rep, log):
             + 'legs x%.2f, body above x%.2f, arms x%.2f / x%.2f' % (pre.legs * fit.legs, pre.s * fit.s, *fit.arm_len)
             + ('' if pre.Lu.crotch_found else ' (couldn\'t see where the legs part: assumed)'))
         rep['proportions'] = dict(legs=round(pre.legs * fit.legs, 3), body=round(pre.s * fit.s, 3), arms=[round(a, 3) for a in fit.arm_len])
+    if st.webs == 'split' and len(body.bones) > 6:
+        crotch_y = _sides(body, rep)[0]
+        cut = 0
+        for i, p in enumerate(parts):
+            parts[i], n = character.split_between_legs(p, crotch_y)
+            cut += n
+        if cut:
+            allP = np.concatenate([p['P'] for p in parts])
+            off = np.cumsum([0] + [len(p['P']) for p in parts])
+            allT = np.concatenate([p['T'] + o for p, o in zip(parts, off)])
+            J = W = None
+            rep['webs_cut'] = cut
+            log('  %d triangle(s) joined the two legs (a web of cloth between them): cut down the middle so each half '
+                'moves with its own leg (Between the legs: keep, to undo)' % cut)
     if J is None:
-        J, W = character.transfer_weights(body, allP, T=allT)
+        J, W = character.transfer_weights(body, allP, T=allT, sides=_sides(body, rep) if st.limbs == 'own_side' else None)
     allpcs = pieces.all_pieces(parts)
     force_head = np.zeros(len(allP), bool)
     force_body = np.zeros(len(allP), bool)
@@ -792,7 +995,7 @@ def _character(parts, body, st, rep, log):
         n = len(p['P'])
         p = dict(p, J=J[k:k + n], W=W[k:k + n])
         k += n
-        regs = character.regions_for(body, p['P'], p['T']) if len(p['T']) else []
+        regs = character.groups_for(body, p['P'], p['T']) if len(p['T']) else []
         by = {}
         for ti, r in enumerate(regs):
             by.setdefault(r, []).append(ti)
@@ -813,12 +1016,26 @@ def _character(parts, body, st, rep, log):
     return out
 
 
-def _lod_copies(parts, lods, max_vertices, log):
-    """Zombies have near / middle / far versions: the full body for the near one, thinned copies for the others."""
+# a model this light is drawn in full at every distance (one copy marked for all the levels of detail): thinning a
+# low-poly model only breaks it (holes, folded arms)
+LOD_FULL_UP_TO = 8000
+
+
+def _lod_copies(parts, lods, max_vertices, log, mode='auto'):
+    """Zombies have near / middle / far versions: the full body for the near one, thinned copies for the others.
+    mode: 'auto' (light models: the full body for every level), 'full' (always), 'thin' (always thinned copies)."""
     if len(lods) <= 1:
         return parts, max_vertices
-    share = [1.0, 0.3, 0.12][:len(lods)]
     total = sum(len(p['P']) for p in parts)
+    if mode == 'full' or (mode == 'auto' and total <= LOD_FULL_UP_TO):
+        mask = 0
+        for lv in lods:
+            mask |= int(lv)
+        base = _thin_parts(parts, max_vertices, log) if total > max_vertices else parts
+        log('Levels of detail: your model (%d vertices) is drawn in full at every distance%s.' % (
+            total, '' if mode == 'full' else ' (it\'s light enough; thinned copies would show holes)'))
+        return [dict(p, lod=mask) for p in base if len(p['T'])], max_vertices
+    share = [1.0, 0.3, 0.12][:len(lods)]
     near_budget = int(max_vertices / sum(share))
     base = _thin_parts(parts, near_budget, lambda *a: None) if total > near_budget else parts
     btot = sum(len(p['P']) for p in base)
@@ -920,6 +1137,11 @@ def _merge(placed):
 def convert(model_path, original_bytes, parts, materials, st, log=print, companions=None):
     """-> (payload entries [arc.Entry], stats dict). Raises ValueError for models the tool can't write.
     companions: {model path: bytes} of the models companions_needed() names (Frank's clothes)."""
+    said, out_log = [], log
+
+    def log(msg):
+        said.append(msg)
+        out_log(msg)
     om = mod.Model(original_bytes)
     if not om.supported():
         raise ValueError('this game model uses a vertex layout the tool does not write (some Frank outfit parts, cutscene models and level geometry)')
@@ -928,11 +1150,11 @@ def convert(model_path, original_bytes, parts, materials, st, log=print, compani
     extra = []
     if model_path.lower() == FRANK and companions:
         extra = [(mod.Model(companions[k]), FRANK_BODY_GROUPS) for k in FRANK_CLOTHES if k in companions]
-    placed, kind, rep, s = prepare(model_path, om, parts, st, log, extra)
+    placed, kind, rep, s = prepare(model_path, om, parts, st, log, extra, materials)
     if kind == 'character':
         body_lods = rep['character']['lods']
         if len(body_lods) > 1:
-            placed, _ = _lod_copies(placed, body_lods, st.max_vertices, log)
+            placed, _ = _lod_copies(placed, body_lods, st.max_vertices, log, st.lods)
         else:
             placed = _thin_parts(placed, st.max_vertices, log)
     else:
@@ -964,7 +1186,7 @@ def convert(model_path, original_bytes, parts, materials, st, log=print, compani
             raise
         less = int(st.max_vertices * 0.8)
         log('Over the game\'s 65,535 vertices once split into pieces: trying again with a vertex budget of %d.' % less)
-        return convert(model_path, original_bytes, parts, materials, replace(st, max_vertices=less), log, companions)
+        return convert(model_path, original_bytes, parts, materials, replace(st, max_vertices=less), out_log, companions)
     entries = [arc.Entry.from_data(model_path, arc.TYPE_MODEL, data)]
     mask = tex.encode(Image.new('RGB', (16, 16), (70, 70, 70)), 16, colour_map=False)
     for k, mi in enumerate(order):
@@ -991,4 +1213,80 @@ def convert(model_path, original_bytes, parts, materials, st, log=print, compani
         log('Frank\'s starting clothes (%s) are hidden so they don\'t cover your model. Clothes he changes into later still show.'
             % ', '.join(k.rsplit('\\', 1)[-1] for k in stats['hide']))
     log('Built: %d vertices, %d triangles, %d materials, size %s (original %s)' % (stats['vertices'], stats['triangles'], stats['materials'], stats['size'], stats['original_size']))
+    stats['problems'] = _problems(rep, st, kind, nm, om, log, said)
     return entries, stats
+
+
+# what the Problems list offers to change: (setting, value, button text)
+def _fix(setting, value, label):
+    return dict(setting=setting, value=value, label=label)
+
+
+def _problems(rep, st, kind, nm, om, log, said):
+    """Problems found ahead of time, for the Problems list: what was fixed automatically (with a way back), what to
+    check, and the setting that helps. [dict(level='fixed' | 'warn' | 'info', text, fixes=[...])]"""
+    out = []
+    f = rep.get('faces') or {}
+    if f.get('reversed'):
+        out.append(dict(level='fixed', text='%d triangle(s) faced inwards (%.1f%% of the surface): the game would show holes '
+                        'there. Turned round.' % (f['reversed'], 100 * f.get('area', 0)), fixes=[_fix('faces', 'as_is', 'Undo')]))
+    if f.get('backed'):
+        out.append(dict(level='fixed', text='%d thin open surface(s) of double-sided materials (cloth, leaves, hair) got a '
+                        'back so they show from both sides.' % f['backed'], fixes=[_fix('faces', 'as_is', 'Undo')]))
+    if f.get('skipped'):
+        out.append(dict(level='warn', text='%d open double-sided surface(s) stay one-sided (no vertices to spare): see-through '
+                        'from behind.' % f['skipped'], fixes=[_fix('faces', 'both', 'Draw both sides of everything')]))
+    if rep.get('webs_cut'):
+        out.append(dict(level='fixed', text='%d triangle(s) joined the two legs: they\'d stretch across when walking. Cut '
+                        'down the middle so each half moves with its own leg.' % rep['webs_cut'], fixes=[_fix('webs', 'keep', 'Undo')]))
+    if kind == 'character':
+        pr = rep.get('proportions') or {}
+        legs = pr.get('legs', 1.0)
+        arms = max(pr.get('arms', [1.0]) or [1.0], key=lambda a: abs(math.log(max(a, 1e-3))))
+        if st.body == 'fit' and (legs > 1.45 or legs < 0.7):
+            out.append(dict(level='warn', text='Legs %s x%.2f to reach the game\'s knees and hips (the legs were found to part at '
+                            '%.0f%% of the height). Long-stretched legs look smeared; if that height is wrong, set it.' % (
+                                'stretched' if legs > 1 else 'shortened', legs, rep.get('crotch', 0)),
+                            fixes=[_fix('crotch', round(rep.get('crotch', 45)), 'Set where the legs part'), _fix('body', 'as_is', 'Keep my proportions')]))
+        if st.body == 'fit' and (arms > 1.6 or arms < 0.6):
+            out.append(dict(level='warn', text='Arms %s x%.2f to reach the game\'s elbows and wrists. Is the model in a T-pose or '
+                            'A-pose with straight arms?' % ('stretched' if arms > 1 else 'shortened', arms),
+                            fixes=[_fix('body', 'as_is', 'Keep my proportions')]))
+        try:
+            share, where, _ = character.model_stretch(nm)
+            base, _, _ = character.model_stretch(om)
+        except Exception:  # noqa: BLE001
+            share, where, base = 0.0, [], 0.0
+        rep['stretch'] = dict(share=round(share, 4), where=[(n, round(v, 4)) for n, v in where[:4]], game=round(base, 4))
+        if share > max(2.5 * base, 0.012):
+            spots = ', '.join(n for n, v in where[:3])
+            log('Stretch check: %.1f%% of the surface stretches a lot when bending (the original: %.1f%%), at: %s. Orange in '
+                'the moving parts check.' % (100 * share, 100 * base, spots))
+            fx = []
+            if st.limbs != 'own_side':
+                fx.append(_fix('limbs', 'own_side', 'Keep legs and arms to their own side'))
+            if st.webs != 'split':
+                fx.append(_fix('webs', 'split', 'Cut cloth between the legs'))
+            if st.pose != 'auto':
+                fx.append(_fix('pose', 'auto', 'Straighten the pose'))
+            out.append(dict(level='warn', text='%.1f%% of the surface stretches a lot when bending (the game\'s own model: %.1f%%), '
+                            'mostly at the %s: orange in the moving parts check. Usually a part of the model that joins '
+                            'two limbs, or arms that aren\'t straight out.' % (100 * share, 100 * base, spots), fixes=fx))
+        lv = [l for l in said if l.startswith('Levels of detail: your model')]
+        if lv:
+            out.append(dict(level='fixed', text='Zombies far away use simpler versions; your model is light enough to be drawn in '
+                            'full at every distance (thinned copies would have holes in arms and legs).',
+                            fixes=[_fix('lods', 'thin', 'Use thinned copies')]))
+    if kind == 'rigid':
+        h = rep.get('hold') or {}
+        if h.get('found'):
+            out.append(dict(level='info', text='Handle found: its top is in Frank\'s hand (the red mark), front forwards. '
+                            'Move in the hand adjusts it.', fixes=[_fix('grip', 'box', 'Fill the original\'s box instead')]))
+        elif st.grip == 'auto' and st.place != 'origin':
+            out.append(dict(level='info', text='No handle found: it fills the original\'s space. The red mark is Frank\'s hand '
+                            '(the line runs up his forearm); use Move in the hand if it should sit elsewhere. A model made '
+                            'with its grip at the origin can use Place: my model\'s origin.', fixes=[_fix('place', 'origin', 'Use my model\'s origin')]))
+    if any(l.startswith('The model has') and 'Thinning' in l for l in said):
+        out.append(dict(level='warn', text='The model has more vertices than the game takes: it was thinned roughly, which can '
+                        'leave holes. Reducing it in Blender (Decimate) first looks better.', fixes=[]))
+    return out

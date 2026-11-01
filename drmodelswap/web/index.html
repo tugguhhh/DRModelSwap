@@ -130,6 +130,13 @@ main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100v
       <label class="frank">Frank's clothes</label><div class="seg frank" id="clothes"><button data-v="default">Hide his starting clothes</button><button data-v="keep">Keep them on</button></div>
       <label class="chr">Pose</label><div class="seg chr" id="pose"><button data-v="auto">Straighten to T-pose if needed</button><button data-v="as_is">Use as it is</button><span class="hint" style="margin-left:6px">the game's people stand with arms straight out to the sides; A-pose models are turned into that, the log says what it found</span></div>
       <label class="chr">Body</label><div class="seg chr" id="body"><button data-v="fit">Fit to the game's joints</button><button data-v="as_is">Keep my proportions</button><span class="hint" style="margin-left:6px">the game's animations set the hip height and bend at its elbows and knees: legs and arms are stretched or shortened so yours bend there too. "Keep" only scales it (bends in the wrong places if your proportions differ)</span></div>
+      <label class="chr">Where the legs part</label><div class="chr crotchrow"></div>
+      <label class="chr">Between the legs</label><div class="seg chr" id="webs"><button data-v="split">Cut down the middle</button><button data-v="keep">Keep</button><span class="hint" style="margin-left:6px">cloth that joins the two legs (baggy trousers, a robe) would stretch across when walking: cut, each half moves with its own leg</span></div>
+      <label class="chr">Legs and arms</label><div class="seg chr" id="limbs"><button data-v="own_side">Each follows its own side</button><button data-v="nearest">Nearest bones</button><span class="hint" style="margin-left:6px">wide trousers or sleeves can be nearer the other leg or the body: "own side" keeps them to their own leg and arm</span></div>
+      <label class="chr">Far away</label><div class="seg chr" id="lods"><button data-v="auto">Automatic</button><button data-v="full">Whole model</button><button data-v="thin">Thinned copies</button><span class="hint" style="margin-left:6px">zombies only: the game draws simpler versions further away. Thinning a low-poly model leaves holes, so light models are drawn whole</span></div>
+      <label class="obj">Hold</label><div class="seg obj" id="grip"><button data-v="auto">Find the handle</button><button data-v="box">Fill the original's space</button><span class="hint" style="margin-left:6px">red = Frank's hand, the line runs up his forearm. A gun's handle top goes in his hand, front forwards</span></div>
+      <label class="obj">Move in the hand</label><div class="obj holdrow"></div>
+      <label>Faces</label><div class="seg" id="faces"><button data-v="fix">Fix inside-out faces</button><button data-v="both">Draw both sides</button><button data-v="as_is">As in my file</button><span class="hint" style="margin-left:6px">the game draws only the front of each face: inside-out ones would be holes (magenta in the see-through check). "Both sides" doubles the vertices</span></div>
       <label>Scale</label><div><input type="range" id="scale" min="0.1" max="5" step="0.05" value="1" style="width:200px;vertical-align:middle"> <input type="number" id="scalen" min="0.05" max="20" step="0.05" value="1" style="width:76px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 7px;font:inherit">×</div>
       <label>Place</label><div class="seg" id="place"><button data-v="ground">On the ground</button><button data-v="center">Centred</button><button data-v="origin">Keep .glb origin</button></div>
       <label>Textures up to</label><div><select id="maxtex"><option>512</option><option selected>1024</option><option>2048</option></select> <span class="hint">pixels</span></div>
@@ -149,7 +156,9 @@ main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100v
       <div class="view"><img id="img-orig" alt=""><div class="cap">Original</div></div>
       <div class="view"><img id="img-new" alt="" style="display:none"><div class="cap" id="cap-new">Your model (blue box = the original's size)</div></div>
       <div class="view" id="view-pose" style="display:none"><img id="img-pose" alt=""><div class="cap" id="cap-pose">Moving parts check</div></div>
+      <div class="view" id="view-check" style="display:none"><img id="img-check" alt=""><div class="cap" id="cap-check">See-through check</div></div>
     </div>
+    <div id="problems" style="margin-top:12px"></div>
     <div class="log" id="log" style="margin-top:12px;display:none"></div>
     <div class="actions">
       <button class="primary" id="install" disabled>Install into the game</button>
@@ -163,7 +172,7 @@ main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100v
 const TOKEN = "__TOKEN__";
 const $ = s => document.querySelector(s);
 let models = [], sel = null, st = {}, glbInfo = null, busy = false, timer = null;
-let settings = {roles: {}, rot_x: 0, rot_y: 0, rot_z: 0, orient: 'auto', yaw: 0, tilt: 'none', size: 'footprint', scale: 1, place: 'ground', max_texture: 1024, max_vertices: 60000, wheels: 'auto', wheel_size: 'game', wheel_x: 'mine', clothes: 'default', wheel_fit: 'axles', pose: 'auto', body: 'fit', seats: 'auto', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0};
+let settings = {grip: 'auto', hold_x: 0, hold_y: 0, hold_z: 0, crotch: 0, webs: 'split', limbs: 'own_side', lods: 'auto', faces: 'fix', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0, orient: 'auto', yaw: 0, tilt: 'none', size: 'footprint', scale: 1, place: 'ground', max_texture: 1024, max_vertices: 60000, wheels: 'auto', wheel_size: 'game', wheel_x: 'mine', clothes: 'default', wheel_fit: 'axles', pose: 'auto', body: 'fit', seats: 'auto', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0};
 
 async function api(path, body, raw, headers) {
   const opt = {headers: Object.assign({'X-Token': TOKEN}, headers || {})};
@@ -229,9 +238,11 @@ function choose(key) {
   document.querySelectorAll('#main .chr').forEach(e => e.style.display = chr ? '' : 'none');
   document.querySelectorAll('#main .nochr').forEach(e => e.style.display = chr ? 'none' : '');
   document.querySelectorAll('#main .frank').forEach(e => e.style.display = frank ? '' : 'none');
+  document.querySelectorAll('#main .obj').forEach(e => e.style.display = (veh || chr) ? 'none' : '');
   // each game model keeps its own settings; a new one starts from its kind's defaults (nothing carries over)
   Object.assign(settings, {orient: 'auto', yaw: 0, tilt: 'none', scale: 1, place: 'ground', size: veh ? 'wheels' : chr ? 'height' : 'long',
-    seats: st && st.coop ? 'auto' : 'fit', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0, pose: 'auto', body: 'fit', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0});
+    seats: st && st.coop ? 'auto' : 'fit', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0, pose: 'auto', body: 'fit', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0,
+    grip: 'auto', hold_x: 0, hold_y: 0, hold_z: 0, crotch: 0, webs: 'split', limbs: 'own_side', lods: 'auto', faces: 'fix'});
   if (settingsByKey[key]) Object.assign(settings, JSON.parse(settingsByKey[key]));
   wire();
   // the file this game model was given (earlier now, or the one its installed swap was made from)
@@ -257,6 +268,41 @@ function rotRows() {
   row.querySelector('[data-reset]').onclick = () => { settings.rot_x = settings.rot_y = settings.rot_z = 0; paint(); schedule(); };
   paint();
 }
+// a held item moved in Frank's hand (game units: a pistol is about 30 long)
+function holdRows() {
+  const row = document.querySelector('#main .holdrow'); if (!row) return;
+  row.innerHTML = [['x', 'sideways'], ['y', 'down \u2194 up'], ['z', 'back \u2194 forward']].map(([a, t]) =>
+    `<div class="nud"><span class="hint">${t}</span><input type="range" min="-100" max="100" step="1" data-a="${a}"><input type="number" min="-200" max="200" step="1" data-n="${a}"></div>`).join('') +
+    `<button class="small" data-reset="1">Reset</button> <span class="hint">moves it relative to his hand (red); 1 unit = 1 cm</span>`;
+  const paint = () => row.querySelectorAll('input[type=range]').forEach(i => { const v = settings['hold_' + i.dataset.a] || 0; i.value = Math.max(-100, Math.min(100, v)); row.querySelector(`[data-n="${i.dataset.a}"]`).value = v; });
+  row.querySelectorAll('input[type=range]').forEach(i => i.oninput = () => { settings['hold_' + i.dataset.a] = +i.value; paint(); schedule(); });
+  row.querySelectorAll('input[type=number]').forEach(i => i.onchange = () => { let v = Math.round(+i.value) || 0; v = Math.max(-200, Math.min(200, v)); settings['hold_' + i.dataset.n] = v; paint(); schedule(); });
+  row.querySelector('[data-reset]').onclick = () => { ['x', 'y', 'z'].forEach(a => settings['hold_' + a] = 0); paint(); schedule(); };
+  paint();
+}
+// where the legs part (share of the height): found automatically, or set by hand when the log says it's wrong
+function crotchRow() {
+  const row = document.querySelector('#main .crotchrow'); if (!row) return;
+  row.innerHTML = `<div class="nud"><button class="small" data-auto="1">Auto</button><input type="range" min="20" max="70" step="1"><input type="number" min="20" max="70" step="1"><span class="hint">% of the height</span></div>` +
+    `<span class="hint">where your model's legs part, from the floor. Auto finds it (the log and the Problems list say where); set it if the legs come out stretched or squashed</span>`;
+  const r = row.querySelector('input[type=range]'), n = row.querySelector('input[type=number]'), b = row.querySelector('[data-auto]');
+  const paint = () => { b.classList.toggle('sel', !settings.crotch); r.value = settings.crotch || 45; n.value = settings.crotch ? settings.crotch : ''; };
+  r.oninput = () => { settings.crotch = +r.value; paint(); schedule(); };
+  n.onchange = () => { const v = Math.round(+n.value); settings.crotch = v ? Math.max(20, Math.min(70, v)) : 0; paint(); schedule(); };
+  b.onclick = () => { settings.crotch = 0; paint(); schedule(); };
+  paint();
+}
+// the Problems list: found before the model goes in the game; what was fixed (with a way back) and what to try
+function drawProblems(list) {
+  const box = $('#problems'); if (!box) return;
+  if (!list || !list.length) { box.innerHTML = '<div class="hint">Problems found ahead of time: none.</div>'; return; }
+  const icon = {fixed: '<span style="color:var(--ok)">Fixed</span>', warn: '<span style="color:var(--acc)">Check</span>', info: '<span style="color:var(--acc2)">Note</span>'};
+  box.innerHTML = '<div style="font-weight:600;margin-bottom:4px">Problems found ahead of time</div>' + list.map((p, i) =>
+    `<div style="margin:6px 0;line-height:1.35"><b>${icon[p.level] || ''}</b> ${esc(p.text)} ` +
+    (p.fixes || []).map((f, j) => `<button class="small" data-p="${i}" data-f="${j}">${esc(f.label)}</button>`).join(' ') + '</div>').join('');
+  box.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+    const f = list[+b.dataset.p].fixes[+b.dataset.f]; settings[f.setting] = f.value; wire(); schedule(0); });
+}
 function seatRows() {
   document.querySelectorAll('.seatrow').forEach(row => {
     const k = row.dataset.k;
@@ -281,6 +327,7 @@ function wire() {
     el.querySelectorAll('button').forEach(b => b.onclick = () => { if (b.dataset.v === 'auto') settings.orient = 'auto'; else { settings.orient = 'manual'; settings.yaw = +b.dataset.v; } paint(); schedule(); }); paint(); }
   segs('size', 'size'); segs('place', 'place');
   segs('wheels', 'wheels'); segs('wheel_size', 'wheel_size'); segs('wheel_x', 'wheel_x'); segs('clothes', 'clothes'); segs('wheel_fit', 'wheel_fit'); segs('pose', 'pose'); segs('body', 'body'); segs('seats', 'seats'); seatRows(); rotRows();
+  segs('webs', 'webs'); segs('limbs', 'limbs'); segs('lods', 'lods'); segs('grip', 'grip'); segs('faces', 'faces'); holdRows(); crotchRow();
   $('#tilt').value = settings.tilt; $('#tilt').onchange = e => { settings.tilt = e.target.value; if (settings.orient === 'auto') { settings.orient = 'manual'; settings.yaw = 0; $('#yaw').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.v === '0')); } schedule(); };
   $('#scale').value = Math.min(5, settings.scale); $('#scalen').value = (+settings.scale).toFixed(2);
   $('#scale').oninput = e => { settings.scale = +e.target.value; $('#scalen').value = settings.scale.toFixed(2); schedule(); };
@@ -393,6 +440,9 @@ async function preview() {
     drawParts(s.pieces || []);
     if (s.pose_caption) { $('#img-pose').src = '/api/preview/pose?t=' + TOKEN + '&n=' + Date.now(); $('#view-pose').style.display = ''; $('#cap-pose').textContent = 'Moving parts check, ' + s.pose_caption + ': everything should stay attached and in place'; }
     else $('#view-pose').style.display = 'none';
+    $('#img-check').src = '/api/preview/check?t=' + TOKEN + '&n=' + Date.now(); $('#view-check').style.display = '';
+    $('#cap-check').textContent = 'See-through check: front and back, the backs of faces in magenta (the game doesn\'t draw them: magenta that shows = holes in the game)' + (s.see_through ? `: ${(100 * s.see_through).toFixed(1)}%` : '');
+    drawProblems(s.problems);
     $('#install').disabled = false; msg('');
   } catch (e) { $('#cap-new').textContent = 'Your model'; msg(esc(e.message), 'err'); }
   finally { busy = false; }

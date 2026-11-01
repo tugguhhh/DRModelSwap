@@ -24,6 +24,11 @@ what it did so you can correct it.
   arms are fitted to the game's joints so knees and elbows bend in the right places, the head moves as one piece.
 - **Parts list**: see what the tool took each piece to be (wheel, door, head, body...), change it, or leave pieces out
   (stands, ground planes).
+- **Problems found ahead of time**: before anything goes in the game, the tool checks for what would look wrong there:
+  faces that would show as holes, cloth that would stretch when a character walks, legs or arms stretched to fit,
+  where a gun sits in Frank's hand. It fixes what it safely can, says so (with a button to undo), and offers the setting
+  that helps for the rest. A **see-through check** picture shows holes in magenta; the **moving parts check** shows
+  stretched spots in orange.
 - **Safe**: every game file is backed up before the first change; **Restore** puts the originals back byte for byte.
   The game's code isn't touched, only its data files.
 
@@ -53,10 +58,14 @@ a random key so no web page can talk to it). Close the console window or press *
 2. Pick a game model on the left (filter **Vehicles** / **Objects** / **Characters**, or search).
 3. Drop your model on **1. Your model**.
 4. Look at the preview: the original on top, yours below (blue box = the original's size, grey figure = a person
-   1.83 m tall). Vehicles and characters get a third picture, the **moving parts check**: wheels turned and steered,
-   doors opened, arms and legs bent, head turned. Read the log under it: it says what was found and done.
-5. Fix what's wrong (see below). The preview updates by itself.
-6. **Close the game**, click **Install into the game**, start the game.
+   1.83 m tall, red = Frank's hand for things he holds). Vehicles and characters get the **moving parts check**: wheels
+   turned and steered, doors opened, a character walking (stretched spots in orange). The **see-through check** shows the
+   model from the front and from behind with the backs of faces in magenta: the game doesn't draw those, so magenta
+   that shows is a hole in the game.
+5. Read **Problems found ahead of time** under the pictures: what was fixed automatically (each with a way back) and
+   what to check, with buttons for the settings that help. The log under it says everything that was found and done.
+6. Fix what's wrong (see below). The preview updates by itself.
+7. **Close the game**, click **Install into the game**, start the game.
 
 To undo: **Restore the original** on that model, or **Restore every original** at the bottom. Each game model remembers
 the file you gave it and its settings, and an installed swap keeps a copy of the file it was made from, so you can come
@@ -76,6 +85,7 @@ same swaps installed** (send them your model and settings, or the changed game f
 | **Size** | Chosen by kind: vehicles **Match the wheels** (the original's ground area, at most 1.3× its length or width and 1.8× its height, then nudged by at most 15% so your wheelbase sits on the game's axles), characters **Same height**, objects **Match longest side**. Or: *Match length & width*, *Fit inside original*, *Real size* (model in metres, 1 m = 100 game units). |
 | **Scale** | 0.05× to 20× on top (type a number for more than 5×). |
 | **Place** | On the original's ground (default), centred, or at the model's own origin. |
+| **Faces** | **Fix inside-out faces** (default): the game draws only the front of each face, so faces turned inwards would be holes; they're turned round (each connected surface is made to agree with itself, and a closed one to face outwards). Thin open surfaces of materials marked double-sided in the file (single-layer cloth, leaves, hair cards) get a back. *Draw both sides*: every face two-sided (doubles the vertices). *As in my file*: nothing changed. |
 | **Textures up to** / **Vertex budget** | Texture size (64 to 2048) and the most vertices (the game's limit is 65,536 per model; bigger models are thinned). |
 
 ### Vehicles
@@ -121,10 +131,34 @@ Frank (pl00), survivors (npc..), psychopaths (em4..g) and zombies (em00..) share
   smoothed along your mesh. The head (and hair, hats, glasses, when they're separate pieces, as in most models) moves as
   one piece with the head bone, sealed to the collar so no gap opens at the neck. Rigged models are read in their rest
   pose; their own rig isn't needed.
-- Drawn in every display group the original uses (zombie clothing variants, Frank's hand poses, faces), so it shows
-  whatever the game switches on; zombies get near / middle / far detail levels; one texture for all materials.
+- **Where the legs part**: found from the triangles (the gap between the legs; baggy trousers or a narrow gap don't fool
+  it) or set by hand (% of the height). If the legs come out stretched a lot, the Problems list says so and offers it.
+- **Between the legs: cut down the middle** (default): cloth joining the two legs (a web of trousers, a robe) would be
+  stretched across whenever the legs move apart; it's cut along the middle so each half moves with its own leg.
+- **Legs and arms: each follows its own side** (default): wide trousers or sleeves can be nearer the other leg or the
+  body; they take weights only from their own leg's or arm's bones, so nothing is pulled across.
+- **Stretch check**: your character is bent in test poses (walking, crouching, elbows bent, head turned) and every
+  triangle that stretches a lot is found, compared with the game's own model, named by joint in the Problems list and
+  drawn orange in the moving parts check.
+- Drawn in the display groups of the original's body parts, **and of every other part that covers the same place**:
+  zombies switch groups on and off for their clothing variants (long or short sleeves, trousers or shorts), and a
+  triangle drawn only with the bare-arm groups would vanish on a long-sleeved zombie. One texture for all materials.
+- **Far away** (zombies): the game draws simpler versions further away. A light model (up to 8,000 vertices) is drawn
+  whole at every distance; heavier ones get thinned copies (thinning keeps fronts and backs apart and triangles facing
+  the right way). *Whole model* / *Thinned copies* choose by hand.
 - **Frank**: his starting clothes are hidden so they don't cover your model (they come back with Restore); clothes he
   changes into later still show.
+
+### Things Frank holds
+
+The game holds an item at its origin: Frank's hand (the red cube in the preview; the red line runs up his forearm).
+
+- **Hold: find the handle** (default): a model with a handle under its body (a gun) gets the top of its handle put in
+  Frank's hand and its front forwards (turned round if it was backwards: a handle leans back, a barrel is the longer
+  side). Placed like the original holds its own handle when the original has one. Models without a handle fill the
+  original's space as before.
+- **Move in the hand**: sideways / up / forward, up to 100 with the sliders, 200 typed (a pistol is about 30 long).
+- A model made with its grip at its own origin can use **Place: keep .glb origin**.
 
 ### Parts list
 
@@ -162,8 +196,9 @@ python -m drmodelswap restore "C:\...\Dead Rising" om0098        (or --all)
 python -m drmodelswap export  "C:\...\Dead Rising" om0098 reference.glb
 ```
 
-`swap --help` lists every option (turn, size, wheels, pose, body...). Without `--yaw` / `--tilt` the model is turned
-automatically.
+`swap --help` lists every option (turn, size, wheels, seats, pose, body, faces, grip, `--hold X Y Z`, crotch, webs,
+limbs, lods...). Without `--yaw` / `--tilt` the model is turned automatically. The Problems list is printed with the
+options that help.
 
 ## Known limits
 
@@ -173,6 +208,11 @@ automatically.
 - Effects the game draws itself (fire, sparks, a beam sword's glow) stay as they are.
 - Objects that aren't vehicles or characters move as one piece.
 - Characters: fingers and faces don't animate beyond the game's 23 bones; skirts and long coats follow the thighs.
+- Zombie clothing variants: which display groups the game turns on for which zombie isn't in the model file, so the
+  tool draws each part of your model with every group that covers that place. That costs some extra drawing; holes
+  should be gone, but check a few zombies in the game.
+- Where Frank holds a gun is matched to the game's own guns (within a few cm for the handgun); unusual shapes may need
+  Move in the hand.
 - A vehicle saved facing backwards may need a click on 180° (front and back can look alike to the automatic turn).
 - Very detailed models (over about 60,000 vertices) are thinned automatically, roughly; a preview of one with 100,000+
   triangles can take a minute. Reducing it in Blender first (Decimate) looks better and is faster.

@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.1.0
+
+Problems found ahead of time, fixed where it's safe, and tools to fix the rest yourself.
+
+- **Problems list**: under the preview, what was found before the model goes in the game: what was fixed
+  automatically (with a button to undo) and what to check (with buttons for the settings that help). The command line
+  prints it too.
+- **See-through check** (new picture): the model from the front and behind with the backs of faces in magenta. The game
+  doesn't draw backs, so magenta that shows is a hole in the game.
+- **Faces** setting: faces turned inside out are found and turned round (default); open surfaces of double-sided
+  materials get a back; or draw every face from both sides.
+- **Characters**:
+  - Holes in arms and legs on zombies fixed. Each part of the model is now also drawn with the groups of the clothing
+    variants that cover the same place (long or short sleeves, trousers or shorts).
+  - Zombies' far-away versions no longer have holes: light models are drawn whole at every distance, and thinning
+    keeps fronts and backs apart and triangles facing the right way.
+  - **Where the legs part** is found from the triangles (baggy trousers made legs come out far too long), or set by
+    hand.
+  - **Between the legs**: cloth joining the two legs is cut down the middle so it doesn't stretch across when walking.
+  - **Legs and arms** take weights only from their own side.
+  - **Stretch check**: test poses find triangles that stretch a lot, named by joint and shown orange in the moving
+    parts check.
+- **Things Frank holds**:
+  - **Hold: find the handle**: a gun's handle top goes in Frank's hand, front forwards (turned round if backwards),
+    placed like the original holds its own.
+  - **Move in the hand** sliders.
+  - Frank's hand and forearm are drawn in the preview.
+- Command line: `--faces`, `--grip`, `--hold X Y Z`, `--crotch`, `--webs`, `--limbs`, `--lods`.
+
 ## 1.0.1
 
 - **Driver seat without the co-op mod**: new Riders choice *Fit my model to Frank's seat*. Your model is moved so its

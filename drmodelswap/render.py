@@ -13,12 +13,15 @@ def _view(yaw, pitch):
     return Rx @ Ry
 
 
-def render(model, textures, size=(560, 400), yaw=-140.0, pitch=-22.0, box=None, ss=2, pose=None, groups=None, marks=None, lines=None):
+def render(model, textures, size=(560, 400), yaw=-140.0, pitch=-22.0, box=None, ss=2, pose=None, groups=None, marks=None, lines=None,
+           see_through=False, hot=None):
     """model: mod.Model; textures: {name: PIL image or None}; box: (min, max) drawn as a thin outline
     (the original model's box when previewing a replacement). Front of the game model (+Z) faces left-forward.
     pose: {bone index: 3x3 rotation} to draw it moved (wheels spun, steering turned, arms lowered...).
     groups: only pieces of these display groups (None = all; a piece drawn in several groups is drawn once).
-    marks: [(point, colour)] small dots (e.g. wheel axles). lines: [((a, b), colour)] drawn on top (seated riders)."""
+    marks: [(point, colour)] small dots (e.g. wheel axles). lines: [((a, b), colour)] drawn on top (seated riders).
+    see_through: the back of every triangle drawn magenta: the game doesn't draw backs, so magenta that shows is a place
+    you'll see through in the game. hot: per-vertex flags; triangles touching one are drawn orange (problem spots)."""
     W, H = size[0] * ss, size[1] * ss
     img = Image.new('RGB', (W, H), (38, 40, 46))
     dr = ImageDraw.Draw(img)
@@ -81,7 +84,14 @@ def render(model, textures, size=(560, 400), yaw=-140.0, pitch=-22.0, box=None, 
         light = np.array([0.35, 0.6, -0.72])
         light /= np.linalg.norm(light)
         shade = 0.45 + 0.55 * np.abs(fn @ light)
-        C = np.clip(C * shade[:, None], 0, 255).astype(np.uint8)
+        C = np.clip(C * shade[:, None], 0, 255)
+        if hot is not None:
+            h = np.asarray(hot, bool)[T].any(1)
+            C[h] = C[h] * 0.35 + np.array([255.0, 140.0, 0.0]) * 0.65
+        if see_through:
+            back = fn[:, 2] > 0          # facing away from the camera (front faces point at it: -z here)
+            C[back] = np.array([235.0, 40.0, 200.0]) * (0.75 + 0.25 * shade[back, None])
+        C = C.astype(np.uint8)
         depth = Z[T].mean(1)
         order = np.argsort(depth)[::-1]  # far first
         pts = S[T]

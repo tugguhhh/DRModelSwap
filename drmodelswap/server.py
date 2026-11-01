@@ -9,7 +9,7 @@ import numpy as np
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
-from . import __version__, blender, convert, export, game, glb, mod, models, render, rig, seats, tex
+from . import __version__, blender, character, convert, export, game, glb, mod, models, render, rig, seats, tex
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 
@@ -73,6 +73,7 @@ class State:
         self.previews = {}       # cache of original previews
         self.new_preview = None
         self.pose_preview = None
+        self.check_preview = None
         self.config = load_config()
         models.BLENDER['path'] = self.config.get('blender')
 
@@ -180,6 +181,8 @@ class Handler(BaseHTTPRequestHandler):
                     gs = seats.game_seat(S.game.model(key)['path'])
                     ln = (_riders(dict(driver=list(gs), passenger=list(gs * ([1, 1, 1] if _bike(key) else [-1, 1, 1]))), key) if gs is not None else []) or []
                     ln += _scale_figure(om, 'character' if rig.is_character(om) else 'other')
+                    if not rig.is_character(om) and not rig.is_vehicle(S.game.model(key)['path'], om):
+                        ln += _hand()
                     S.previews[key] = render.render(om, S.game.original_textures(key, om), lines=ln or None)
                 return self._png(S.previews[key])
             if u.path == '/api/preview/new':
@@ -198,6 +201,10 @@ class Handler(BaseHTTPRequestHandler):
                         lines = [(ed, (255, 220, 0)) for ed in edges] + (S.new_lines or [])
                         return self._png(render.render(S.new_model, S.new_texs, box=S.new_box, lines=lines))
                 return self._png(S.new_preview)
+            if u.path == '/api/preview/check':
+                if S.check_preview is None:
+                    return self._send(404, {'error': 'no preview yet'})
+                return self._png(S.check_preview)
             if u.path == '/api/preview/pose':
                 if S.pose_preview is None:
                     return self._send(404, {'error': 'no preview yet'})
@@ -291,12 +298,29 @@ class Handler(BaseHTTPRequestHandler):
                     extra = {k: convert.blank_model(k, comps[k]) for k in stats.get('hide', [])}
                     om, nm = mod.Model(orig), mod.Model(payload[0].data())
                     texs = {e.name: tex.decode(e.data(), 256) for e in payload[1:]}
-                    S.new_lines = (_riders(stats.get('seats'), key) or []) + _scale_figure(nm, stats.get('kind'))
+                    S.new_lines = (_riders(stats.get('seats'), key) or []) + _scale_figure(nm, stats.get('kind')) + \
+                        (_hand() if stats.get('kind') == 'rigid' else [])
                     S.new_model, S.new_texs, S.new_box = nm, texs, (om.box_min, om.box_max)
                     S.new_preview = render.render(nm, texs, box=(om.box_min, om.box_max), lines=S.new_lines)
                     pose, cap = rig.demo_pose(path, nm)
-                    S.pose_preview = render.render(nm, texs, pose=pose) if pose else None
+                    hot = None
+                    if stats.get('kind') == 'character':
+                        # stretched spots in orange; the walking test pose shows them best
+                        try:
+                            _, _, hot = character.model_stretch(nm)
+                            pose, cap = character.TEST_POSES['walking'], 'walking (orange = stretched a lot)'
+                        except Exception:  # noqa: BLE001
+                            hot = None
+                    S.pose_preview = render.render(nm, texs, pose=pose, hot=hot, yaw=200, pitch=-8) if pose else None
                     stats['pose_caption'] = cap if pose else ''
+                    S.check_preview, seen = _see_through(nm, texs)
+                    stats['see_through'] = round(seen, 4)
+                    if seen > 0.015:
+                        stats.setdefault('problems', []).append(dict(
+                            level='warn', text='About %.0f%% of what shows of your model is the back of faces (magenta in the '
+                            'see-through check): the game doesn\'t draw those, so you\'ll see through there. Usually holes '
+                            'or single-layer surfaces in the model.' % (100 * seen),
+                            fixes=[dict(setting='faces', value='both', label='Draw both sides of everything')] if st.faces != 'both' else []))
                     S.pending = (key, payload, stats, st, log, extra)
                 return self._send(200, dict(stats=stats, log=log))
             if u.path == '/api/install':
@@ -331,6 +355,35 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             return self._send(500, {'error': '%s: %s' % (type(e).__name__, e)})
+
+
+def _hand():
+    """Frank's hand at a held item's origin: a small fist (red) and his forearm running back from it."""
+    r = 4.0
+    c = [np.array([x, y, z]) for x in (-r, r) for y in (-r, r) for z in (-r, r)]
+    col = (255, 70, 70)
+    out = [((c[i], c[j]), col) for i in range(8) for j in range(i + 1, 8) if bin(i ^ j).count('1') == 1]
+    out.append(((np.array([0.0, 0.0, -r]), np.array([0.0, 0.0, -30.0])), col))
+    return out
+
+
+def _see_through(nm, texs):
+    """The model from the front and from behind with the backs of faces in magenta (the game doesn't draw them: where
+    magenta shows, you'd see through). -> (picture, share of the model's pixels that are magenta)."""
+    from PIL import Image
+    ims, seen, tot = [], 0, 0
+    for yaw in (-140.0, 40.0):
+        im = render.render(nm, texs, size=(280, 400), yaw=yaw, pitch=-15.0, see_through=True)
+        a = np.asarray(im).astype(int)
+        bg = (np.abs(a - np.array([38, 40, 46])).sum(2) < 12)
+        mag = (a[:, :, 0] > 150) & (a[:, :, 1] < 90) & (a[:, :, 2] > 120)
+        seen += int(mag.sum())
+        tot += int((~bg).sum())
+        ims.append(im)
+    out = Image.new('RGB', (560, 400), (38, 40, 46))
+    out.paste(ims[0], (0, 0))
+    out.paste(ims[1], (280, 0))
+    return out, seen / max(tot, 1)
 
 
 def _scale_figure(model, kind):
