@@ -27,8 +27,14 @@ what it did so you can correct it.
 - **Problems found ahead of time**: before anything goes in the game, the tool checks for what would look wrong there:
   faces that would show as holes, cloth that would stretch when a character walks, legs or arms stretched to fit,
   where a gun sits in Frank's hand. It fixes what it safely can, says so (with a button to undo), and offers the setting
-  that helps for the rest. A **see-through check** picture shows holes in magenta; the **moving parts check** shows
-  stretched spots in orange.
+  that helps for the rest. A **see-through check** picture shows holes in magenta (also in the simpler versions
+  zombies use far away); the **moving parts check** shows a character walking, with stretched spots in orange and
+  spots that open up in magenta.
+- **Unusual shapes handled**: heavy or cartoon-proportioned characters, legs modelled touching, neckless heads,
+  baggy trousers, models with seams between many pieces.
+- **DeadRisingEx mods**: save a swap as a mod for [DeadRisingEx](https://github.com/grimdoomer/DeadRisingEx) instead of
+  changing the game's files, switch it on and off in its launcher, or download it as a .zip (mod + readme) to share.
+  Or save the converted files loose (`.mod` / `.tex`) for your own tools.
 - **Safe**: every game file is backed up before the first change; **Restore** puts the originals back byte for byte.
   The game's code isn't touched, only its data files.
 
@@ -66,6 +72,19 @@ a random key so no web page can talk to it). Close the console window or press *
    what to check, with buttons for the settings that help. The log under it says everything that was found and done.
 6. Fix what's wrong (see below). The preview updates by itself.
 7. **Close the game**, click **Install into the game**, start the game.
+
+**Or make it a DeadRisingEx mod** (the game's files stay untouched):
+
+- **Save as DeadRisingEx mod** writes the swap as `DRMS_<model>_<your file>.arc` into `nativeWin64\Mods`. In
+  `DeadRisingLauncher.exe` > Settings > Mods, tick it and start the game from the launcher (Steam running). Untick it to
+  turn it off.
+- **Download mod to share (.zip)**: the same `.arc` plus a `README.txt` saying how to install it. Others need only
+  DeadRisingEx, not this tool.
+- **Save loose files (.mod / .tex)**: no archive at all: the converted model (rModel, `.mod`) and its textures (`.tex`)
+  as plain files in the game's folder layout (`model\om\om00a6\om00a6.mod`...) in a folder you choose, with
+  `DRMS_files.txt` listing each file's game path and type id, for packing with your own tools (ARCtool and the like).
+- One file holds everything for that swap (for Frank, also the emptied starting clothes). Vehicles: use *Fit my model to
+  Frank's seat*, since the co-op mod's seat file isn't part of a mod. Only share models you have the right to share.
 
 To undo: **Restore the original** on that model, or **Restore every original** at the bottom. Each game model remembers
 the file you gave it and its settings, and an installed swap keeps a copy of the file it was made from, so you can come
@@ -133,21 +152,28 @@ Frank (pl00), survivors (npc..), psychopaths (em4..g) and zombies (em00..) share
   pose; their own rig isn't needed.
 - **Where the legs part**: found from the triangles (the gap between the legs; baggy trousers or a narrow gap don't fool
   it) or set by hand (% of the height). If the legs come out stretched a lot, the Problems list says so and offers it.
-- **Between the legs: cut down the middle** (default): cloth joining the two legs (a web of trousers, a robe) would be
-  stretched across whenever the legs move apart; it's cut along the middle so each half moves with its own leg.
+- **Between the legs: cut down the middle** (default): cloth joining the two legs (a web of trousers, a robe, legs
+  modelled touching) would be stretched across whenever the legs move apart; it's cut along the middle so each half
+  moves with its own leg, and each leg gets an inner side where the cut opened it (legs modelled touching have none
+  there, so they'd be see-through from the side when walking).
+- **Neck: seal to the body** (default): a head piece whose edge lies on the body (a neckless cartoon head that covers
+  the shirt's collar) bends with the body along that edge, so no gap opens at the neck when he looks up or bends.
+  *Head piece all rigid* keeps the whole piece rigid (no stretching, but the gap can show).
 - **Legs and arms: each follows its own side** (default): wide trousers or sleeves can be nearer the other leg or the
   body; they take weights only from their own leg's or arm's bones, so nothing is pulled across.
+- **Holes when moving**: the moving parts check (walking) also shows the backs of faces in magenta; if a lot opens up
+  when he moves (legs modelled touching, a head piece covering the neck), the Problems list says so.
 - **Stretch check**: your character is bent in test poses (walking, crouching, elbows bent, head turned) and every
   triangle that stretches a lot is found, compared with the game's own model, named by joint in the Problems list and
   drawn orange in the moving parts check.
 - Drawn in the display groups of the original's body parts, **and of every other part that covers the same place**:
   zombies switch groups on and off for their clothing variants (long or short sleeves, trousers or shorts), and a
   triangle drawn only with the bare-arm groups would vanish on a long-sleeved zombie. One texture for all materials.
-- **Far away** (zombies): the game draws simpler versions further away. A light model (up to 8,000 vertices) is drawn
-  whole at every distance; heavier ones get thinned copies (thinning keeps fronts and backs apart and triangles facing
-  the right way). *Whole model* / *Thinned copies* choose by hand.
-- **Frank**: his starting clothes are hidden so they don't cover your model (they come back with Restore); clothes he
-  changes into later still show.
+- **Far away** (zombies): the game draws simpler versions further away. A model up to 12,000 vertices is drawn whole
+  at every distance. Heavier ones get thinned copies, made from all parts together on one grid so no cracks open
+  along seams (head and body, shirt and trousers), with fronts and backs kept apart and triangles facing the right
+  way. The see-through check shows those versions too, and the Problems list offers *Whole model at every distance*
+  if they'd have holes.
 
 ### Things Frank holds
 
@@ -192,6 +218,9 @@ python -m drmodelswap list    "C:\...\Dead Rising" sword
 python -m drmodelswap swap    "C:\...\Dead Rising" om0098 my_car.glb
 python -m drmodelswap swap    "C:\...\Dead Rising" om0098 my_car.fbx --yaw 90 --size footprint --scale 1.2
 python -m drmodelswap swap    "C:\...\Dead Rising" npc86g my_person.glb
+python -m drmodelswap swap    "C:\...\Dead Rising" om00a6 ray_gun.glb --mod mods        (DeadRisingEx mod in nativeWin64\Mods)
+python -m drmodelswap swap    "C:\...\Dead Rising" om00a6 ray_gun.glb --mod ray_gun.zip (mod + readme, to share)
+python -m drmodelswap swap    "C:\...\Dead Rising" om00a6 ray_gun.glb --loose               (.mod / .tex next to ray_gun.glb)
 python -m drmodelswap restore "C:\...\Dead Rising" om0098        (or --all)
 python -m drmodelswap export  "C:\...\Dead Rising" om0098 reference.glb
 ```

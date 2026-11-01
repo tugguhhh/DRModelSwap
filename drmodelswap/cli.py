@@ -39,8 +39,11 @@ def main(argv=None):
     sw.add_argument('--hold', type=float, nargs=3, default=[0.0, 0.0, 0.0], metavar=('X', 'Y', 'Z'), help='hand-held items: move it in the hand (game units: sideways, up, forward)')
     sw.add_argument('--crotch', type=float, default=0.0, help='characters: where the legs part, %% of the height (0 = automatic)')
     sw.add_argument('--webs', default='split', choices=['split', 'keep'], help='characters: cut cloth that joins the two legs down the middle')
+    sw.add_argument('--neck', default='seal', choices=['seal', 'rigid'], help='characters: a head piece edge lying on the body bends with the body')
     sw.add_argument('--limbs', default='own_side', choices=['own_side', 'nearest'], help='characters: legs and arms take weights only from their own side')
     sw.add_argument('--lods', default='auto', choices=['auto', 'full', 'thin'], help='zombies: what is drawn far away')
+    sw.add_argument('--mod', metavar='FILE', help='write a DeadRisingEx mod (.arc, or .zip with a readme) instead of changing the game files; FILE = mods to put it in nativeWin64\\Mods')
+    sw.add_argument('--loose', metavar='FOLDER', nargs='?', const='', help='write the converted .mod / .tex files into FOLDER (default: next to your model) instead of changing the game files')
     sw.add_argument('--body', default='fit', choices=['fit', 'as_is'], help='characters: fit legs and arms onto the game skeleton\'s joints')
     ex = sub.add_parser('export', help='save a game model as .glb (a reference to build on in Blender)')
     ex.add_argument('game')
@@ -77,7 +80,7 @@ def main(argv=None):
         st = convert.Settings(yaw=a.yaw, tilt=a.tilt, size=a.size, scale=a.scale, place=a.place, max_texture=a.max_texture, max_vertices=a.max_vertices,
                               wheels=a.wheels, wheel_size=a.wheel_size, wheel_x=a.wheel_x, clothes=a.clothes,
                               wheel_fit=a.wheel_fit, pose=a.pose, body=a.body, faces=a.faces, grip=a.grip, hold_x=a.hold[0], hold_y=a.hold[1],
-                              hold_z=a.hold[2], crotch=a.crotch, webs=a.webs, limbs=a.limbs, lods=a.lods,
+                              hold_z=a.hold[2], crotch=a.crotch, webs=a.webs, neck=a.neck, limbs=a.limbs, lods=a.lods,
                               seats=a.seats or ('auto' if game.has_coop_mod(gm.dir) else 'fit'),
                               orient='manual' if (a.yaw or a.tilt != 'none') else 'auto')
         path = gm.model(key)['path']
@@ -87,6 +90,26 @@ def main(argv=None):
         for pb in stats.get('problems', []):
             print('[%s] %s%s' % (pb['level'], pb['text'], (' (try: ' + '; '.join('--%s %s' % (f['setting'].replace('_', '-'), f['value']) for f in pb['fixes']) + ')') if pb['fixes'] else ''))
         extra = {k: convert.blank_model(k, comps[k]) for k in stats.get('hide', [])}
+        if a.loose is not None:
+            folder = a.loose or os.path.dirname(os.path.abspath(a.glb))
+            for f in game.write_loose(folder, payload, extra):
+                print('wrote ' + f)
+            print('(DRMS_files.txt lists their game paths and types.) The game files were not changed.')
+            return 0
+        if a.mod:
+            name = game.mod_name(path, a.glb)
+            if a.mod.lower() == 'mods':
+                print('DeadRisingEx mod saved: ' + gm.save_mod(name, payload, extra))
+            elif a.mod.lower().endswith('.zip'):
+                with open(a.mod, 'wb') as f:
+                    f.write(game.mod_zip(name, payload, extra, '%s replaced by %s' % (path, os.path.basename(a.glb)), __version__,
+                                         os.path.basename(a.glb)))
+                print('DeadRisingEx mod (with readme) written: ' + a.mod)
+            else:
+                game.write_mod(a.mod, payload, extra)
+                print('DeadRisingEx mod written: ' + a.mod)
+            print('Enable it in DeadRisingLauncher.exe > Settings > Mods. The game files were not changed.')
+            return 0
         for line in gm.install(key, payload, dict(glb=os.path.basename(a.glb), settings=st.to_dict(), stats=stats), extra=extra):
             print(line)
         return 0

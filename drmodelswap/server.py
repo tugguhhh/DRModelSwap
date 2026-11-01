@@ -169,6 +169,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, dict(version=__version__, game=g.dir if g else '', scanning=S.scanning, scan_error=S.scan_error,
                                             progress=list(prog), models=len(g.models) if g else 0, coop=bool(g) and game.has_coop_mod(g.dir),
                                             swaps=g.manifest() if g else {}, detected=detect_game_dirs(),
+                                            loose_dir=S.config.get('loose_dir') or (os.path.join(g.data, 'loose') if g else ''),
                                             glb=S.glb[3] | dict(file=S.glb[0]) if S.glb else None,
                                             pending=dict(key=S.pending[0], stats=S.pending[2]) if S.pending else None))
             if u.path == '/api/models':
@@ -209,6 +210,24 @@ class Handler(BaseHTTPRequestHandler):
                 if S.pose_preview is None:
                     return self._send(404, {'error': 'no preview yet'})
                 return self._png(S.pose_preview)
+            if u.path == '/api/modzip':
+                # the previewed swap as a DeadRisingEx mod to share: the .arc and a short readme in a .zip
+                key = q.get('key', [''])[0]
+                if not S.pending or S.pending[0] != key:
+                    return self._send(400, {'error': 'make a preview for this model first'})
+                k, payload, stats, st, log, extra = S.pending
+                m = S.game.model(key)
+                src = S.glb[0] if S.glb else ''
+                name = game.mod_name(m['path'], src)
+                what = '%s (%s) replaced by %s' % (m.get('name') or m['path'], m['path'].rsplit('\\', 1)[-1], src or 'a new model')
+                body = game.mod_zip(name, payload, extra, what, __version__, src)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/zip')
+                self.send_header('Content-Disposition', 'attachment; filename="%s"' % (name[:-4] + '.zip'))
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return None
             if u.path == '/api/export':
                 key = q.get('key', [''])[0]
                 m = S.game.model(key)
@@ -311,10 +330,30 @@ class Handler(BaseHTTPRequestHandler):
                             pose, cap = character.TEST_POSES['walking'], 'walking (orange = stretched a lot)'
                         except Exception:  # noqa: BLE001
                             hot = None
-                    S.pose_preview = render.render(nm, texs, pose=pose, hot=hot, yaw=200, pitch=-8) if pose else None
+                    S.pose_preview = render.render(nm, texs, pose=pose, hot=hot, yaw=200, pitch=-8,
+                                                   see_through=stats.get('kind') == 'character') if pose else None
+                    if stats.get('kind') == 'character' and pose:
+                        moving = _moving_holes(nm, texs, pose)
+                        stats['see_through_moving'] = round(moving, 4)
+                        if moving > max(0.02, 2 * stats.get('see_through', 0) + 0.01):
+                            fx = [dict(setting=k_, value=v_, label=l_) for k_, v_, l_ in (
+                                ('webs', 'split', 'Cut cloth between the legs'), ('neck', 'seal', 'Seal the neck'),
+                                ('faces', 'both', 'Draw both sides of everything')) if getattr(st, k_) != v_]
+                            stats.setdefault('problems', []).append(dict(
+                                level='warn', text='When he walks, %.0f%% of what shows is the inside of the model (magenta in the '
+                                'moving parts check): places that are hidden standing still open up when the legs or head move, '
+                                'often legs modelled touching or a head piece that covers the neck.' % (100 * moving), fixes=fx))
                     stats['pose_caption'] = cap if pose else ''
-                    S.check_preview, seen = _see_through(nm, texs)
+                    S.check_preview, seen, far = _see_through(nm, texs)
                     stats['see_through'] = round(seen, 4)
+                    stats['see_through_far'] = {str(k): round(v, 4) for k, v in far.items()}
+                    worst_far = max(far.values(), default=0.0)
+                    if worst_far > 0.03:
+                        stats.setdefault('problems', []).append(dict(
+                            level='warn', text='The simpler versions zombies use further away show holes (%.0f%% magenta, the '
+                            'smaller pictures in the see-through check). Drawing the whole model at every distance avoids them '
+                            '(it costs more to draw in big crowds).' % (100 * worst_far),
+                            fixes=[dict(setting='lods', value='full', label='Whole model at every distance')] if st.lods != 'full' else []))
                     if seen > 0.015:
                         stats.setdefault('problems', []).append(dict(
                             level='warn', text='About %.0f%% of what shows of your model is the back of faces (magenta in the '
@@ -338,6 +377,30 @@ class Handler(BaseHTTPRequestHandler):
                         except OSError:
                             pass
                 return self._send(200, dict(log=out))
+            if u.path == '/api/modsave':
+                # the previewed swap saved as a DeadRisingEx mod in nativeWin64\Mods (the game's files aren't touched)
+                key = self._json().get('key', '')
+                if not S.pending or S.pending[0] != key:
+                    raise ValueError('make a preview for this model first')
+                k, payload, stats, st, log, extra = S.pending
+                name = game.mod_name(S.game.model(key)['path'], S.glb[0] if S.glb else '')
+                with S.lock:
+                    p = S.game.save_mod(name, payload, extra)
+                return self._send(200, dict(path=p, name=name, dre=S.game.has_dead_rising_ex(), installed=bool(S.game.manifest().get(S.game.resolve(key).lower()))))
+            if u.path == '/api/loose':
+                # the previewed swap's files as plain .mod / .tex files in a folder of your choice (no archive)
+                j = self._json()
+                key = j.get('key', '')
+                if not S.pending or S.pending[0] != key:
+                    raise ValueError('make a preview for this model first')
+                folder = (j.get('folder') or '').strip().strip('"') or os.path.join(S.game.data, 'loose')
+                if not os.path.isabs(folder):
+                    raise ValueError('give the whole folder path (like C:\\Users\\you\\Desktop\\my mod)')
+                k, payload, stats, st, log, extra = S.pending
+                files = game.write_loose(folder, payload, extra)
+                S.config['loose_dir'] = folder
+                save_config(S.config)
+                return self._send(200, dict(folder=folder, files=[os.path.relpath(f, folder) for f in files]))
             if u.path == '/api/remove':
                 j = self._json()
                 with S.lock:
@@ -369,21 +432,64 @@ def _hand():
 
 def _see_through(nm, texs):
     """The model from the front and from behind with the backs of faces in magenta (the game doesn't draw them: where
-    magenta shows, you'd see through). -> (picture, share of the model's pixels that are magenta)."""
+    magenta shows, you'd see through); zombies' simpler far-away versions are shown too. -> (picture, share of the
+    near model's pixels that are magenta, {level: share} for the far-away versions)."""
     from PIL import Image
-    ims, seen, tot = [], 0, 0
-    for yaw in (-140.0, 40.0):
-        im = render.render(nm, texs, size=(280, 400), yaw=yaw, pitch=-15.0, see_through=True)
+
+    def shot(yaw, w=280):
+        im = render.render(nm, texs, size=(w, 400), yaw=yaw, pitch=-15.0, see_through=True)
         a = np.asarray(im).astype(int)
         bg = (np.abs(a - np.array([38, 40, 46])).sum(2) < 12)
         mag = (a[:, :, 0] > 150) & (a[:, :, 1] < 90) & (a[:, :, 2] > 120)
-        seen += int(mag.sum())
-        tot += int((~bg).sum())
-        ims.append(im)
-    out = Image.new('RGB', (560, 400), (38, 40, 46))
-    out.paste(ims[0], (0, 0))
-    out.paste(ims[1], (280, 0))
-    return out, seen / max(tot, 1)
+        return im, int(mag.sum()), int((~bg).sum())
+    lods = sorted({pc['flags'][1] for pc in nm.pieces})
+    keep = nm.pieces
+    ims, far = [], {}
+    try:
+        if len(lods) > 1:
+            nm.pieces = [pc for pc in keep if pc['flags'][1] & lods[0]]
+        seen = tot = 0
+        for yaw in (-140.0, 40.0):
+            im, a, b = shot(yaw)
+            ims.append(im)
+            seen, tot = seen + a, tot + b
+        for lv in lods[1:]:
+            nm.pieces = [pc for pc in keep if pc['flags'][1] & lv and not pc['flags'][1] & lods[0]]
+            if not nm.pieces:
+                continue
+            s_ = t_ = 0
+            for yaw in (-140.0, 40.0):
+                im, a, b = shot(yaw, 200)
+                s_, t_ = s_ + a, t_ + b
+            ims.append(im)
+            far[lv] = s_ / max(t_, 1)
+    finally:
+        nm.pieces = keep
+    out = Image.new('RGB', (sum(i.width for i in ims), 400), (38, 40, 46))
+    x = 0
+    for im in ims:
+        out.paste(im, (x, 0))
+        x += im.width
+    return out, seen / max(tot, 1), far
+
+
+def _moving_holes(nm, texs, pose):
+    """Share of the model's pixels that are backs of faces (magenta) in the walking pose, from four sides."""
+    seen = tot = 0
+    keep = nm.pieces
+    lods = sorted({pc['flags'][1] for pc in keep})
+    try:
+        if len(lods) > 1:
+            nm.pieces = [pc for pc in keep if pc['flags'][1] & lods[0]]
+        for yaw in (-110.0, 70.0, 180.0, 0.0):
+            a = np.asarray(render.render(nm, texs, size=(200, 280), yaw=yaw, pitch=-5.0, pose=pose, see_through=True)).astype(int)
+            bg = (np.abs(a - np.array([38, 40, 46])).sum(2) < 12)
+            mag = (a[:, :, 0] > 150) & (a[:, :, 1] < 90) & (a[:, :, 2] > 120)
+            seen += int(mag.sum())
+            tot += int((~bg).sum())
+    finally:
+        nm.pieces = keep
+    return seen / max(tot, 1)
 
 
 def _scale_figure(model, kind):

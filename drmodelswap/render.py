@@ -93,6 +93,10 @@ def render(model, textures, size=(560, 400), yaw=-140.0, pitch=-22.0, box=None, 
             C[back] = np.array([235.0, 40.0, 200.0]) * (0.75 + 0.25 * shade[back, None])
         C = C.astype(np.uint8)
         depth = Z[T].mean(1)
+        if see_through:
+            # a back with a front in the same place (a two-sided surface) is hidden by that front, as in the game
+            span = float(np.ptp(Z)) if len(Z) else 1.0
+            depth = depth + np.where(fn[:, 2] > 0, 1e-3 * span, 0.0)
         order = np.argsort(depth)[::-1]  # far first
         pts = S[T]
         for k in order:

@@ -37,6 +37,90 @@ def has_coop_mod(game_dir):
     return os.path.isfile(os.path.join(game_dir, 'coop_probe.dll'))
 
 
+def mod_name(target_path, source_file):
+    """File name for a DeadRisingEx mod: DRMS_<game model>_<your file>.arc, letters / digits / _ / - only."""
+    base = target_path.replace('/', '\\').rsplit('\\', 1)[-1]
+    src = os.path.splitext(os.path.basename(source_file or 'model'))[0]
+    clean = re.sub(r'[^A-Za-z0-9_-]+', '_', '%s_%s' % (base, src)).strip('_')[:60]
+    return 'DRMS_%s.arc' % clean
+
+
+def write_mod(path, payload, extra=None):
+    """One .arc with the swap's files (and, for Frank, the emptied clothes models): what DeadRisingEx loads over the
+    game's own files."""
+    ents, seen = [], set()
+    for e in list(payload) + [e for k in sorted(extra or {}) for e in extra[k]]:
+        if (e.name.lower(), e.type) not in seen:
+            seen.add((e.name.lower(), e.type))
+            ents.append(e)
+    arc.write_arc(path, 4, ents)
+
+
+LOOSE_EXT = {arc.TYPE_MODEL: '.mod', arc.TYPE_TEXTURE: '.tex'}
+
+
+def write_loose(folder, payload, extra=None):
+    """The swap's files as plain files (not packed in an archive), in the game's folder layout:
+    folder\\model\\om\\om00a6\\om00a6.mod (rModel), ..._BM.tex (rTexture)... plus DRMS_files.txt listing each file's
+    game path and type id, for packing with other tools. -> list of the files written."""
+    out, seen, lines = [], set(), []
+    for e in list(payload) + [e for k in sorted(extra or {}) for e in extra[k]]:
+        if (e.name.lower(), e.type) in seen:
+            continue
+        seen.add((e.name.lower(), e.type))
+        rel = e.name.replace('/', '\\').split('\\')
+        if any(x in ('', '.', '..') for x in rel) or ':' in e.name:
+            raise ValueError('unexpected file name in the swap: %r' % e.name)
+        p = os.path.join(folder, *rel) + LOOSE_EXT.get(e.type, '.%08X' % e.type)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        data = e.data()
+        with open(p, 'wb') as f:
+            f.write(data)
+        out.append(p)
+        lines.append('%-48s %-6s type 0x%08X  %8d bytes' % (e.name, LOOSE_EXT.get(e.type, '')[1:] or '?', e.type, len(data)))
+    with open(os.path.join(folder, 'DRMS_files.txt'), 'w', encoding='utf-8') as f:
+        f.write('Files made by DR Model Swap: game path, kind (mod = rModel, tex = rTexture), type id in the .arc, size.\n'
+                'Pack them into the arc that holds that game path (or a DeadRisingEx mod .arc) with your own tools.\n\n')
+        f.write('\n'.join(lines) + '\n')
+    return out
+
+
+MOD_README = """{title}
+{line}
+
+A Dead Rising (PC, 2016) model swap: {what}.
+Made with DR Model Swap {version}{source}.
+
+Install (needs DeadRisingEx: https://github.com/grimdoomer/DeadRisingEx):
+1. Copy {arc} into  Dead Rising\\nativeWin64\\Mods\\  (make the Mods folder if it isn't there).
+2. Open DeadRisingLauncher.exe > Settings > Mods, tick {arc}.
+3. Start the game from DeadRisingLauncher.exe (Steam running).
+
+To remove it, untick it (or delete the file). The game's own files are never changed.
+In co-op, everyone needs the same mods enabled.
+"""
+
+
+def mod_zip(arc_name, payload, extra, what, version, source=''):
+    """A shareable .zip: the mod .arc and a short readme. -> bytes."""
+    import io
+    import tempfile
+    import zipfile
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, arc_name)
+        write_mod(p, payload, extra)
+        with open(p, 'rb') as f:
+            data = f.read()
+    title = os.path.splitext(arc_name)[0]
+    readme = MOD_README.format(title=title, line='=' * len(title), what=what, version=version, arc=arc_name,
+                               source=(' from ' + source) if source else '')
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr(arc_name, data)
+        z.writestr('README.txt', readme.replace('\n', '\r\n'))
+    return b.getvalue()
+
+
 class Game:
     def __init__(self, path):
         self.dir = find_game_dir(path)
@@ -231,6 +315,20 @@ class Game:
             return self.original_model_bytes(path)
         except (GameError, KeyError):
             return None
+
+    # ----- DeadRisingEx mods: the swap as a .arc in nativeWin64\Mods, loaded by DeadRisingEx (game files untouched)
+    def mods_dir(self):
+        return os.path.join(self.native, 'Mods')
+
+    def has_dead_rising_ex(self):
+        return os.path.isfile(os.path.join(self.dir, 'DeadRisingEx.dll'))
+
+    def save_mod(self, file_name, payload, extra=None):
+        """Write the swap as a DeadRisingEx mod into nativeWin64\\Mods. -> its full path."""
+        os.makedirs(self.mods_dir(), exist_ok=True)
+        p = os.path.join(self.mods_dir(), file_name)
+        write_mod(p, payload, extra)
+        return p
 
     def install(self, key, payload, info, extra=None):
         """extra: {other model key: payload} installed with it (Frank's hidden clothes) and removed with it."""

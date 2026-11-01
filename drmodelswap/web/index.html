@@ -131,7 +131,8 @@ main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100v
       <label class="chr">Pose</label><div class="seg chr" id="pose"><button data-v="auto">Straighten to T-pose if needed</button><button data-v="as_is">Use as it is</button><span class="hint" style="margin-left:6px">the game's people stand with arms straight out to the sides; A-pose models are turned into that, the log says what it found</span></div>
       <label class="chr">Body</label><div class="seg chr" id="body"><button data-v="fit">Fit to the game's joints</button><button data-v="as_is">Keep my proportions</button><span class="hint" style="margin-left:6px">the game's animations set the hip height and bend at its elbows and knees: legs and arms are stretched or shortened so yours bend there too. "Keep" only scales it (bends in the wrong places if your proportions differ)</span></div>
       <label class="chr">Where the legs part</label><div class="chr crotchrow"></div>
-      <label class="chr">Between the legs</label><div class="seg chr" id="webs"><button data-v="split">Cut down the middle</button><button data-v="keep">Keep</button><span class="hint" style="margin-left:6px">cloth that joins the two legs (baggy trousers, a robe) would stretch across when walking: cut, each half moves with its own leg</span></div>
+      <label class="chr">Between the legs</label><div class="seg chr" id="webs"><button data-v="split">Cut down the middle</button><button data-v="keep">Keep</button><span class="hint" style="margin-left:6px">cloth that joins the two legs (baggy trousers, a robe, legs modelled touching) would stretch across when walking: cut, each half moves with its own leg, and each leg gets an inner side where the cut opened it</span></div>
+      <label class="chr">Neck</label><div class="seg chr" id="neck"><button data-v="seal">Seal to the body</button><button data-v="rigid">Head piece all rigid</button><span class="hint" style="margin-left:6px">a head piece whose edge lies on the body (a neckless cartoon head covering the shirt's collar) bends with the body there, so no gap opens at the neck when he looks up or bends</span></div>
       <label class="chr">Legs and arms</label><div class="seg chr" id="limbs"><button data-v="own_side">Each follows its own side</button><button data-v="nearest">Nearest bones</button><span class="hint" style="margin-left:6px">wide trousers or sleeves can be nearer the other leg or the body: "own side" keeps them to their own leg and arm</span></div>
       <label class="chr">Far away</label><div class="seg chr" id="lods"><button data-v="auto">Automatic</button><button data-v="full">Whole model</button><button data-v="thin">Thinned copies</button><span class="hint" style="margin-left:6px">zombies only: the game draws simpler versions further away. Thinning a low-poly model leaves holes, so light models are drawn whole</span></div>
       <label class="obj">Hold</label><div class="seg obj" id="grip"><button data-v="auto">Find the handle</button><button data-v="box">Fill the original's space</button><span class="hint" style="margin-left:6px">red = Frank's hand, the line runs up his forearm. A gun's handle top goes in his hand, front forwards</span></div>
@@ -164,6 +165,16 @@ main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100v
       <button class="primary" id="install" disabled>Install into the game</button>
       <button class="danger" id="restore" style="display:none">Restore the original</button>
     </div>
+    <div class="actions" style="margin-top:8px">
+      <button id="modsave" disabled>Save as DeadRisingEx mod</button>
+      <button id="modzip" disabled>Download mod to share (.zip)</button>
+    </div>
+    <div class="actions" style="margin-top:8px;align-items:center">
+      <input type="text" id="loosedir" style="flex:1;min-width:200px" placeholder="folder for loose files">
+      <button id="loose" disabled>Save loose files (.mod / .tex)</button>
+    </div>
+    <div class="hint" style="margin-top:4px">Loose files: the converted model (rModel, .mod) and textures (.tex) as plain files in the game's folder layout (model\om\...), not packed in an archive, for your own tools (ARCtool and the like). DRMS_files.txt lists each one's game path and type.</div>
+    <div class="hint" style="margin-top:4px">A DeadRisingEx mod leaves the game's files alone: the swap goes into nativeWin64\Mods and is switched on or off in DeadRisingEx's launcher (Settings &gt; Mods). The .zip has the mod and a readme, ready to share.</div>
     <div class="hint" style="margin-top:8px">Close the game first. Originals are backed up in the game folder under DRModelSwap\backup.</div>
   </div>
   </div></div>
@@ -172,7 +183,7 @@ main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100v
 const TOKEN = "__TOKEN__";
 const $ = s => document.querySelector(s);
 let models = [], sel = null, st = {}, glbInfo = null, busy = false, timer = null;
-let settings = {grip: 'auto', hold_x: 0, hold_y: 0, hold_z: 0, crotch: 0, webs: 'split', limbs: 'own_side', lods: 'auto', faces: 'fix', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0, orient: 'auto', yaw: 0, tilt: 'none', size: 'footprint', scale: 1, place: 'ground', max_texture: 1024, max_vertices: 60000, wheels: 'auto', wheel_size: 'game', wheel_x: 'mine', clothes: 'default', wheel_fit: 'axles', pose: 'auto', body: 'fit', seats: 'auto', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0};
+let settings = {grip: 'auto', hold_x: 0, hold_y: 0, hold_z: 0, crotch: 0, webs: 'split', neck: 'seal', limbs: 'own_side', lods: 'auto', faces: 'fix', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0, orient: 'auto', yaw: 0, tilt: 'none', size: 'footprint', scale: 1, place: 'ground', max_texture: 1024, max_vertices: 60000, wheels: 'auto', wheel_size: 'game', wheel_x: 'mine', clothes: 'default', wheel_fit: 'axles', pose: 'auto', body: 'fit', seats: 'auto', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0};
 
 async function api(path, body, raw, headers) {
   const opt = {headers: Object.assign({'X-Token': TOKEN}, headers || {})};
@@ -242,7 +253,7 @@ function choose(key) {
   // each game model keeps its own settings; a new one starts from its kind's defaults (nothing carries over)
   Object.assign(settings, {orient: 'auto', yaw: 0, tilt: 'none', scale: 1, place: 'ground', size: veh ? 'wheels' : chr ? 'height' : 'long',
     seats: st && st.coop ? 'auto' : 'fit', seat_x: 0, seat_y: 0, seat_z: 0, pass_x: 0, pass_y: 0, pass_z: 0, pose: 'auto', body: 'fit', roles: {}, rot_x: 0, rot_y: 0, rot_z: 0,
-    grip: 'auto', hold_x: 0, hold_y: 0, hold_z: 0, crotch: 0, webs: 'split', limbs: 'own_side', lods: 'auto', faces: 'fix'});
+    grip: 'auto', hold_x: 0, hold_y: 0, hold_z: 0, crotch: 0, webs: 'split', neck: 'seal', limbs: 'own_side', lods: 'auto', faces: 'fix'});
   if (settingsByKey[key]) Object.assign(settings, JSON.parse(settingsByKey[key]));
   wire();
   // the file this game model was given (earlier now, or the one its installed swap was made from)
@@ -327,7 +338,7 @@ function wire() {
     el.querySelectorAll('button').forEach(b => b.onclick = () => { if (b.dataset.v === 'auto') settings.orient = 'auto'; else { settings.orient = 'manual'; settings.yaw = +b.dataset.v; } paint(); schedule(); }); paint(); }
   segs('size', 'size'); segs('place', 'place');
   segs('wheels', 'wheels'); segs('wheel_size', 'wheel_size'); segs('wheel_x', 'wheel_x'); segs('clothes', 'clothes'); segs('wheel_fit', 'wheel_fit'); segs('pose', 'pose'); segs('body', 'body'); segs('seats', 'seats'); seatRows(); rotRows();
-  segs('webs', 'webs'); segs('limbs', 'limbs'); segs('lods', 'lods'); segs('grip', 'grip'); segs('faces', 'faces'); holdRows(); crotchRow();
+  segs('webs', 'webs'); segs('neck', 'neck'); segs('limbs', 'limbs'); segs('lods', 'lods'); segs('grip', 'grip'); segs('faces', 'faces'); holdRows(); crotchRow();
   $('#tilt').value = settings.tilt; $('#tilt').onchange = e => { settings.tilt = e.target.value; if (settings.orient === 'auto') { settings.orient = 'manual'; settings.yaw = 0; $('#yaw').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.v === '0')); } schedule(); };
   $('#scale').value = Math.min(5, settings.scale); $('#scalen').value = (+settings.scale).toFixed(2);
   $('#scale').oninput = e => { settings.scale = +e.target.value; $('#scalen').value = settings.scale.toFixed(2); schedule(); };
@@ -346,6 +357,10 @@ function wire() {
     else if (e.dataTransfer.files.length) upload([...e.dataTransfer.files].map(f => ({name: f.name, file: f})));
   };
   $('#install').onclick = install;
+  $('#modsave').onclick = saveMod;
+  $('#loosedir').value = $('#loosedir').value || st.loose_dir || '';
+  $('#loose').onclick = saveLoose;
+  $('#modzip').onclick = () => { if (sel) location.href = '/api/modzip?t=' + TOKEN + '&key=' + encodeURIComponent(sel.key); };
   $('#restore').onclick = () => removeSwap(sel.key);
 }
 function showGlb(i) {
@@ -400,7 +415,7 @@ async function upload(list) {
     }
   }
 }
-function schedule(ms) { if (sel) settingsByKey[sel.key] = JSON.stringify(settings); clearTimeout(timer); if (!glbInfo || !sel) return; $('#install').disabled = true; timer = setTimeout(preview, ms === undefined ? 450 : ms); }
+function schedule(ms) { if (sel) settingsByKey[sel.key] = JSON.stringify(settings); clearTimeout(timer); if (!glbInfo || !sel) return; $('#install').disabled = true; $('#modsave').disabled = true; $('#modzip').disabled = true; $('#loose').disabled = true; timer = setTimeout(preview, ms === undefined ? 450 : ms); }
 const ROLE_NAMES = {auto: 'Automatic', body: 'Body (doesn\'t move)', wheel: 'Wheel', steering_wheel: 'Steering wheel', door: 'Door', hood: 'Hood',
   trunk: 'Trunk', handlebar: 'Handlebar', fork: 'Fork', swingarm: 'Swingarm', crank: 'Pedals / crank', head: 'Head (moves with it)', remove: 'Leave out'};
 function drawParts(list) {
@@ -441,11 +456,31 @@ async function preview() {
     if (s.pose_caption) { $('#img-pose').src = '/api/preview/pose?t=' + TOKEN + '&n=' + Date.now(); $('#view-pose').style.display = ''; $('#cap-pose').textContent = 'Moving parts check, ' + s.pose_caption + ': everything should stay attached and in place'; }
     else $('#view-pose').style.display = 'none';
     $('#img-check').src = '/api/preview/check?t=' + TOKEN + '&n=' + Date.now(); $('#view-check').style.display = '';
-    $('#cap-check').textContent = 'See-through check: front and back, the backs of faces in magenta (the game doesn\'t draw them: magenta that shows = holes in the game)' + (s.see_through ? `: ${(100 * s.see_through).toFixed(1)}%` : '');
+    $('#cap-check').textContent = 'See-through check: front and back, the backs of faces in magenta (the game doesn\'t draw them: magenta that shows = holes in the game)' + (s.see_through ? `: ${(100 * s.see_through).toFixed(1)}%` : '') +
+      (s.see_through_far && Object.keys(s.see_through_far).length ? '. Smaller pictures: the simpler versions used further away (' + Object.values(s.see_through_far).map(v => (100 * v).toFixed(1) + '%').join(', ') + ')' : '');
     drawProblems(s.problems);
-    $('#install').disabled = false; msg('');
+    $('#install').disabled = false; $('#modsave').disabled = false; $('#modzip').disabled = false; $('#loose').disabled = false; msg('');
   } catch (e) { $('#cap-new').textContent = 'Your model'; msg(esc(e.message), 'err'); }
   finally { busy = false; }
+}
+async function saveLoose() {
+  $('#loose').disabled = true;
+  try {
+    const r = await api('/api/loose', {key: sel.key, folder: $('#loosedir').value});
+    st.loose_dir = r.folder; $('#loosedir').value = r.folder;
+    msg('Saved ' + r.files.length + ' file(s) in ' + esc(r.folder) + ':<br>' + r.files.map(esc).join('<br>') + '<br>(and DRMS_files.txt: game paths and types)', 'ok');
+  } catch (e) { msg(esc(e.message), 'err'); }
+  $('#loose').disabled = false;
+}
+async function saveMod() {
+  $('#modsave').disabled = true;
+  try {
+    const r = await api('/api/modsave', {key: sel.key});
+    msg('Saved the DeadRisingEx mod: ' + esc(r.path) + '<br>Open DeadRisingLauncher.exe &gt; Settings &gt; Mods, tick <b>' + esc(r.name) + '</b>, and start the game from the launcher.' +
+      (r.dre ? '' : '<br><b>DeadRisingEx isn\'t installed in this game folder</b> (no DeadRisingEx.dll): get it from github.com/grimdoomer/DeadRisingEx.') +
+      (r.installed ? '<br>This model is also installed into the game files: <b>Restore the original</b> if you want only the mod (so turning the mod off really turns it off).' : ''), 'ok');
+  } catch (e) { msg(esc(e.message), 'err'); }
+  $('#modsave').disabled = false;
 }
 async function install() {
   $('#install').disabled = true; msg('<span class="spinner"></span> Writing the game files… (big bundle files take a few seconds)', 'info');

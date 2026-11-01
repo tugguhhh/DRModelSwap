@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.2.0
+
+DeadRisingEx mods, loose files, and fixes for characters that showed holes (heavier or cartoon-shaped models, zombies
+far away, models that open up when they move).
+
+- **DeadRisingEx mods**:
+  - **Save as DeadRisingEx mod** writes the previewed swap into `nativeWin64\Mods` as `DRMS_<model>_<your file>.arc`,
+    without touching the game's files. Switch it on or off in DeadRisingEx's launcher (Settings > Mods).
+  - **Download mod to share (.zip)**: the mod `.arc` plus a readme with install steps. Players need only DeadRisingEx.
+- **Save loose files (.mod / .tex)**: the converted model (rModel) and textures as plain files, not packed in an archive.
+  They're written in the game's folder layout into a folder you choose (remembered), with `DRMS_files.txt` listing
+  game paths and type ids, for packing with your own tools.
+- **Far-away versions without cracks**: zombies' simpler far-away versions were made by thinning each piece of the
+  model on its own, so a see-through line opened wherever two pieces meet (neck, waist, sleeves, two materials). All
+  pieces are now thinned together, so shared edges stay closed. Models up to 12,000 vertices (was 8,000) are drawn
+  whole at every distance, and thinned versions keep more detail.
+- **Legs modelled touching**: where the thighs touch, a model has no inner leg surface. After the legs were cut apart,
+  each leg was see-through from the side when walking. Each leg now gets an inner side that follows the cut exactly.
+- **Neck: seal to the body** (new, default): a head piece whose edge lies on the body (a neckless head covering the
+  shirt's collar) bends with the body along that edge instead of swinging with the head, so no gap opens at the neck.
+  *Head piece all rigid* is the old way.
+- **More checks before the game**:
+  - The see-through check also shows the far-away versions (smaller pictures), and the Problems list offers *Whole
+    model at every distance* when they'd have holes.
+  - The moving parts check (walking) shows see-through spots in magenta, and the Problems list warns when the model
+    opens up as it moves.
+  - The see-through check no longer marks two-sided surfaces as holes.
+  - The stretch warning explains stretching at the neck and offers the rigid head instead.
+- Command line: `swap ... --mod mods | FILE.arc | FILE.zip`, `--loose [FOLDER]`, `--neck seal|rigid`.
+
 ## 1.1.0
 
 Problems found ahead of time, fixed where it's safe, and tools to fix the rest yourself.

@@ -160,7 +160,7 @@ FOLD = (19, 21, 22)          # jaw, right eye, left eye -> head (10)
 HEAD = 10
 
 
-def rigid_head(body, P, T, J, W, offsets=None, force_head=None, force_body=None):
+def rigid_head(body, P, T, J, W, offsets=None, force_head=None, force_body=None, seal_edges=True):
     """Separate pieces of the mesh that sit on the head (the head itself when it's its own piece, hair, a hat,
     glasses, ears) move as one with the head bone. Weights blended from the game's body split a big chin or a long
     face between head and chest, which tears it whenever the head moves. A piece qualifies when it's mostly tied to
@@ -200,13 +200,16 @@ def rigid_head(body, P, T, J, W, offsets=None, force_head=None, force_body=None)
         rigid |= m
         n += 1
     if n:
-        _seal_seams(P, J, W, J0, W0, rigid, tol)
+        _seal_seams(P, J, W, J0, W0, rigid, tol, T if seal_edges else None)
     return n
 
 
-def _seal_seams(P, J, W, J0, W0, rigid, tol):
-    """Where a rigid piece's edge sits on another piece (a head's neck edge on the collar: the same positions), the
-    edge keeps the other piece's weights so the seam can't open, blending into the rigid head a little way up."""
+def _seal_seams(P, J, W, J0, W0, rigid, tol, T=None):
+    """Where a rigid piece's edge sits on another piece, the edge keeps the other piece's weights so the seam can't
+    open, blending into the rigid head a little way up. Two kinds of edge: one at the very same place (a head's neck
+    edge on the collar), and an open edge of the head piece lying on or just over the body (a neckless cartoon head
+    whose collar covers the shirt's neck hole: if the collar swung with the head, the hole would show when he looks
+    up or bends)."""
     if rigid.all() or not rigid.any():
         return
     key = np.round(P / max(tol * 5, 1e-6)).astype(np.int64)
@@ -214,6 +217,21 @@ def _seal_seams(P, J, W, J0, W0, rigid, tol):
     for i in np.flatnonzero(~rigid):
         other.setdefault(tuple(key[i]), i)
     seam = [(i, other[tuple(key[i])]) for i in np.flatnonzero(rigid) if tuple(key[i]) in other]
+    if T is not None and len(T):
+        # open edges of the rigid pieces (the edge of the head mesh) that lie on the body
+        tr = T[rigid[T].all(1)]
+        if len(tr):
+            wk = np.unique(key, axis=0, return_inverse=True)[1].reshape(-1)
+            e = np.sort(np.r_[np.c_[wk[tr[:, 0]], wk[tr[:, 1]]], np.c_[wk[tr[:, 1]], wk[tr[:, 2]]], np.c_[wk[tr[:, 2]], wk[tr[:, 0]]]], 1)
+            ev = np.r_[np.c_[tr[:, 0], tr[:, 1]], np.c_[tr[:, 1], tr[:, 2]], np.c_[tr[:, 2], tr[:, 0]]]
+            _, ix, cnt = np.unique(e, axis=0, return_index=True, return_counts=True)
+            edge_v = np.unique(ev[ix[cnt == 1]].ravel())
+            others = np.flatnonzero(~rigid)
+            if len(edge_v) and len(others):
+                near_d = 0.04 * float(np.ptp(P[:, 1]))
+                I, D = nearest(P[edge_v], P[others], 1)
+                have = {a for a, _ in seam}
+                seam += [(int(v), int(others[i])) for v, i, d in zip(edge_v, I[:, 0], D[:, 0]) if d <= near_d and int(v) not in have]
     if not seam:
         return
     nb = int(max(J.max(), J0.max())) + 1
@@ -796,7 +814,7 @@ def stretch_summary(P, T, worst, joint, base_share=0.0):
     return float(a[hot].sum()) / tot, sorted(by.items(), key=lambda x: -x[1]), flags
 
 
-def split_between_legs(part, crotch_y, cx=0.0):
+def split_between_legs(part, crotch_y, cx=0.0, close=True):
     """Triangles below the crotch that cross the body's middle join the two legs (a web of trousers or a robe between
     them): any rig stretches them across when the legs move apart. They are cut along the middle (x = cx), each half
     goes with its own leg, so the web opens like a split skirt instead. part: a part dict (P, N, UV, T and other
@@ -811,6 +829,7 @@ def split_between_legs(part, crotch_y, cx=0.0):
     if not cross.any():
         return part, 0
     per_vertex = [k for k, v in part.items() if isinstance(v, np.ndarray) and len(v) == len(P) and k != 'T']
+    cut_pts = {1.0: [], -1.0: []}
     new = {k: [part[k]] for k in per_vertex}
     nv = len(P)
     out_T = [T[~cross]]
@@ -845,12 +864,122 @@ def split_between_legs(part, crotch_y, cx=0.0):
         # the lone corner's side: one triangle; the other side: two
         ab1, ac1 = add(a, b, fab, sa), add(a, c, fac, sa)
         ab2, ac2 = add(a, b, fab, -sa), add(a, c, fac, -sa)
+        cut_pts[sa] += [ab1, ac1]
+        cut_pts[-sa] += [ab2, ac2]
         out_T.append(np.array([[a, ab1, ac1], [ab2, b, c], [ab2, c, ac2]], np.int64))
     q = dict(part)
     for k in per_vertex:
         q[k] = np.concatenate(new[k])
     q['T'] = np.concatenate(out_T).astype(np.int64)
+    if close:
+        q = _wall(q, per_vertex, cut_pts, cx)
     return q, int(cross.sum())
+
+
+def _ear_clip(xy):
+    """Triangles filling a simple polygon (points in order, 2D). -> list of index triples."""
+    n = len(xy)
+    if n < 3:
+        return []
+    idx = list(range(n))
+    area = sum(xy[i][0] * xy[(i + 1) % n][1] - xy[(i + 1) % n][0] * xy[i][1] for i in range(n))
+    if area < 0:
+        idx.reverse()
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    def inside(p, a, b, c):
+        return cross(a, b, p) >= 0 and cross(b, c, p) >= 0 and cross(c, a, p) >= 0
+    out, guard = [], 0
+    while len(idx) > 3 and guard < 10 * n:
+        guard += 1
+        for k in range(len(idx)):
+            i0, i1, i2 = idx[k - 1], idx[k], idx[(k + 1) % len(idx)]
+            a, b, c = xy[i0], xy[i1], xy[i2]
+            if cross(a, b, c) <= 1e-12:
+                continue
+            if any(inside(xy[j], a, b, c) for j in idx if j not in (i0, i1, i2)):
+                continue
+            out.append((i0, i1, i2))
+            idx.pop(k)
+            break
+        else:
+            break                       # not simple: fill the rest as a fan
+    if len(idx) >= 3:
+        out += [(idx[0], idx[k], idx[k + 1]) for k in range(1, len(idx) - 1)]
+    return out
+
+
+def _wall(q, per_vertex, cut_pts, cx):
+    """Legs modelled together (thighs touching) have no inside surface where they touch: once the cloth between
+    them is cut, each leg would be open there (see-through from the side). The cut edge on each leg is followed round
+    and filled flat on the cut plane, facing the other leg, so each leg is closed."""
+    P = q['P']
+    ext = max(float(np.ptp(P, 0).max()), 1e-9)
+    walls_T, extra = [], {k: [] for k in per_vertex}
+    nv = len(P)
+    for sgn, lst in cut_pts.items():
+        if len(lst) < 4:
+            continue
+        pairs = np.array(lst, np.int64).reshape(-1, 2)
+        key = np.round(P[pairs.ravel()] / (ext * 1e-5)).astype(np.int64)
+        _, wid = np.unique(key, axis=0, return_inverse=True)
+        wid = wid.reshape(-1, 2)
+        rep = {}
+        for (a, b), (wa, wb) in zip(pairs, wid):
+            rep.setdefault(int(wa), int(a))
+            rep.setdefault(int(wb), int(b))
+        adj = {}
+        for wa, wb in {tuple(sorted((int(a), int(b)))) for a, b in wid if a != b}:
+            adj.setdefault(wa, set()).add(wb)
+            adj.setdefault(wb, set()).add(wa)
+        used = set()
+        chains = []
+        for start in sorted(adj, key=lambda v: len(adj[v])):     # open ends first, then loops
+            if start in used:
+                continue
+            chain, cur, prev = [start], start, None
+            used.add(start)
+            while True:
+                nxt = [v for v in adj[cur] if v != prev and v not in used]
+                if not nxt:
+                    break
+                prev, cur = cur, nxt[0]
+                used.add(cur)
+                chain.append(cur)
+            if len(chain) >= 3:
+                chains.append(chain)
+        for chain in chains:
+            src = [rep[v] for v in chain]
+            xy = [(float(P[i, 2]), float(P[i, 1])) for i in src]
+            tris = _ear_clip(xy)
+            if not tris:
+                continue
+            base = nv
+            for i in src:
+                for k in per_vertex:
+                    v = q[k][i].copy()
+                    if k == 'N':
+                        v = np.array([-sgn, 0.0, 0.0])
+                    extra[k].append(np.asarray(v)[None])
+                nv += 1
+            walls_T += [(base + a, base + b, base + c) for a, b, c in tris]
+    if not walls_T:
+        return q
+    q = dict(q)
+    for k in per_vertex:
+        if extra[k]:
+            q[k] = np.concatenate([q[k]] + extra[k])
+    WT = np.array(walls_T, np.int64)
+    P = q['P']
+    fn = np.cross(P[WT[:, 1]] - P[WT[:, 0]], P[WT[:, 2]] - P[WT[:, 0]])
+    # facing the other leg: the right leg's wall (x < cx) faces +x, the left leg's -x
+    want = np.where(P[WT[:, 0], 0] < cx, 1.0, -1.0)
+    flip = fn[:, 0] * want < 0
+    WT[flip] = WT[flip][:, [0, 2, 1]]
+    q['T'] = np.concatenate([q['T'], WT])
+    return q
 
 
 def model_stretch(m):

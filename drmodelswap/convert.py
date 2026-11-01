@@ -40,6 +40,7 @@ class Settings:
     hold_z: float = 0.0
     faces: str = 'fix'         # 'fix' = inside-out faces turned round (+ backs for open double-sided cloth), 'both' = every face two-sided, 'as_is'
     webs: str = 'split'        # characters: 'split' = cloth joining the two legs is cut down the middle, 'keep'
+    neck: str = 'seal'         # characters: 'seal' = the edge of a head piece lying on the body bends with the body (no gap at the neck), 'rigid'
     crotch: float = 0.0        # characters: where the legs part, % of the height (0 = found automatically)
     lods: str = 'auto'         # characters with levels of detail (zombies): 'auto', 'full' (whole model at every distance), 'thin'
     seats: str = 'auto'        # vehicles: 'auto' = find the model's seats (riders drawn there by the co-op mod), 'fit' = move the
@@ -79,6 +80,7 @@ class Settings:
         s.lods = s.lods if s.lods in ('auto', 'full', 'thin') else 'auto'
         s.limbs = s.limbs if s.limbs in ('own_side', 'nearest') else 'own_side'
         s.webs = s.webs if s.webs in ('split', 'keep') else 'split'
+        s.neck = s.neck if s.neck in ('seal', 'rigid') else 'seal'
         s.faces = s.faces if s.faces in ('fix', 'both', 'as_is') else 'fix'
         s.grip = s.grip if s.grip in ('auto', 'box') else 'auto'
         for k in ('hold_x', 'hold_y', 'hold_z'):
@@ -346,17 +348,64 @@ def _thin_part(p, target):
     return dict(p, P=Pn, N=Nn, UV=UV[first], T=_keep_facing(P, T[keep], Pn, Tn[keep]), J=p['J'][first], W=p['W'][first])
 
 
+def _thin_shared(parts, target):
+    """Thin all parts together to about `target` vertices with one grid: a corner shared by two parts (a seam between
+    head and body, shirt and trousers, two materials, two bones) lands on the same point in both, so no crack opens
+    between them (thinning each part on its own gives each its own points: see-through lines along every seam).
+    Fronts and backs stay apart (an arm's two sides would fold), and so do bones (a wheel and the body)."""
+    parts = [p for p in parts if len(p['P'])]
+    if not parts:
+        return parts
+    allP = np.concatenate([p['P'] for p in parts])
+    allN = np.concatenate([np.nan_to_num(p['N']) if p['N'] is not None else np.zeros_like(p['P']) for p in parts])
+    allJ = np.concatenate([p['J'][:, 0] for p in parts])
+    pid = np.concatenate([np.full(len(p['P']), i) for i, p in enumerate(parts)])
+    side = _side(allN)
+    lo = allP.min(0)
+    ext = max(float(np.ptp(allP, 0).max()), 1e-9)
+    cells = 512
+    while True:
+        q = np.floor((allP - lo) / (ext / cells)).astype(np.int64)
+        cell = ((q[:, 0] * 1000003 + q[:, 1]) * 1000003 + q[:, 2]) * 6 + side
+        uc, cinv = np.unique(cell, return_inverse=True)
+        cinv = cinv.reshape(-1)
+        vkey = (cinv.astype(np.int64) * 512 + allJ) * 4096 + pid
+        if len(np.unique(vkey)) <= target or cells < 8:
+            break
+        cells = int(cells * 0.93)
+    # one point per (cell, side) for every part and bone
+    pos = np.zeros((len(uc), 3))
+    np.add.at(pos, cinv, allP)
+    pos /= np.bincount(cinv, minlength=len(uc))[:, None]
+    out, o = [], 0
+    for i, p in enumerate(parts):
+        n = len(p['P'])
+        P, N, UV, T = p['P'], p['N'], p['UV'], p['T']
+        k = vkey[o:o + n]
+        uk, inv = np.unique(k, return_inverse=True)
+        inv = inv.reshape(-1)
+        first = np.full(len(uk), -1)
+        first[inv[::-1]] = np.arange(n)[::-1]
+        Pn = pos[cinv[o:o + n][first]]
+        Nn = np.zeros((len(uk), 3))
+        np.add.at(Nn, inv, np.nan_to_num(N) if N is not None else 0)
+        Nn /= np.maximum(np.linalg.norm(Nn, axis=1, keepdims=True), 1e-9)
+        Tn = inv[T]
+        keep = (Tn[:, 0] != Tn[:, 1]) & (Tn[:, 1] != Tn[:, 2]) & (Tn[:, 0] != Tn[:, 2])
+        q2 = dict(p, P=Pn, N=Nn, UV=UV[first], T=_keep_facing(P, T[keep], Pn, Tn[keep]), J=p['J'][first], W=p['W'][first])
+        if len(q2['T']):
+            out.append(q2)
+        o += n
+    return out
+
+
 def _thin_parts(parts, max_vertices, log):
     total = sum(len(p['P']) for p in parts)
     if total <= max_vertices:
         return parts
     log('The model has %d vertices; the game takes at most about 65,000. Thinning it (rough: decimating in Blender first '
         'looks better).' % total)
-    out = []
-    for p in parts:
-        tgt = max(60, int(len(p['P']) * max_vertices * 0.9 / total))
-        out.append(_thin_part(p, tgt) if tgt < len(p['P']) else p)
-    return out
+    return _thin_shared(parts, int(max_vertices * 0.9))
 
 
 def _normals(Pw, N, T, R):
@@ -970,8 +1019,8 @@ def _character(parts, body, st, rep, log):
             allT = np.concatenate([p['T'] + o for p, o in zip(parts, off)])
             J = W = None
             rep['webs_cut'] = cut
-            log('  %d triangle(s) joined the two legs (a web of cloth between them): cut down the middle so each half '
-                'moves with its own leg (Between the legs: keep, to undo)' % cut)
+            log('  %d triangle(s) joined the two legs (a web of cloth, or legs modelled touching): cut down the middle so '
+                'each half moves with its own leg, and each leg closed on its inner side (Between the legs: keep, to undo)' % cut)
     if J is None:
         J, W = character.transfer_weights(body, allP, T=allT, sides=_sides(body, rep) if st.limbs == 'own_side' else None)
     allpcs = pieces.all_pieces(parts)
@@ -983,7 +1032,7 @@ def _character(parts, body, st, rep, log):
             force_head[off[i] + vs] = True
         elif r == 'body':
             force_body[off[i] + vs] = True
-    nh = character.rigid_head(body, allP, allT, J, W, off, force_head, force_body)
+    nh = character.rigid_head(body, allP, allT, J, W, off, force_head, force_body, seal_edges=st.neck == 'seal')
     hw = (W * (J == character.HEAD)).sum(1)
     groups = [('%s (head)' % pieces._name(parts[i]), 'head', [(i, vs)]) for i, vs, cid in allpcs if hw[off[i] + vs].mean() > 0.9]
     rep['pieces'] = pieces.entries(parts, [p['P'] for p in parts], groups, min_size=0.03)
@@ -1018,7 +1067,7 @@ def _character(parts, body, st, rep, log):
 
 # a model this light is drawn in full at every distance (one copy marked for all the levels of detail): thinning a
 # low-poly model only breaks it (holes, folded arms)
-LOD_FULL_UP_TO = 8000
+LOD_FULL_UP_TO = 12000
 
 
 def _lod_copies(parts, lods, max_vertices, log, mode='auto'):
@@ -1035,14 +1084,14 @@ def _lod_copies(parts, lods, max_vertices, log, mode='auto'):
         log('Levels of detail: your model (%d vertices) is drawn in full at every distance%s.' % (
             total, '' if mode == 'full' else ' (it\'s light enough; thinned copies would show holes)'))
         return [dict(p, lod=mask) for p in base if len(p['T'])], max_vertices
-    share = [1.0, 0.3, 0.12][:len(lods)]
+    share = [1.0, 0.4, 0.2][:len(lods)]
     near_budget = int(max_vertices / sum(share))
     base = _thin_parts(parts, near_budget, lambda *a: None) if total > near_budget else parts
     btot = sum(len(p['P']) for p in base)
     out = []
     for lv, sh in zip(lods, share):
-        for p in base:
-            q = p if sh == 1.0 else _thin_part(p, max(24, int(len(p['P']) * sh)))
+        level = base if sh == 1.0 else _thin_shared(base, max(24 * len(base), int(btot * sh)))
+        for q in level:
             if len(q['T']):
                 out.append(dict(q, lod=lv))
     log('Levels of detail like the original: %s vertices (near / middle / far)' % ' / '.join(
@@ -1238,7 +1287,7 @@ def _problems(rep, st, kind, nm, om, log, said):
                         'from behind.' % f['skipped'], fixes=[_fix('faces', 'both', 'Draw both sides of everything')]))
     if rep.get('webs_cut'):
         out.append(dict(level='fixed', text='%d triangle(s) joined the two legs: they\'d stretch across when walking. Cut '
-                        'down the middle so each half moves with its own leg.' % rep['webs_cut'], fixes=[_fix('webs', 'keep', 'Undo')]))
+                        'down the middle so each half moves with its own leg, and each leg closed on its inner side.' % rep['webs_cut'], fixes=[_fix('webs', 'keep', 'Undo')]))
     if kind == 'character':
         pr = rep.get('proportions') or {}
         legs = pr.get('legs', 1.0)
@@ -1269,9 +1318,14 @@ def _problems(rep, st, kind, nm, om, log, said):
                 fx.append(_fix('webs', 'split', 'Cut cloth between the legs'))
             if st.pose != 'auto':
                 fx.append(_fix('pose', 'auto', 'Straighten the pose'))
+            if where and where[0][0] == 'neck' and st.neck == 'seal':
+                fx.append(_fix('neck', 'rigid', 'Head piece all rigid (no stretch; a gap may open at the neck)'))
             out.append(dict(level='warn', text='%.1f%% of the surface stretches a lot when bending (the game\'s own model: %.1f%%), '
-                            'mostly at the %s: orange in the moving parts check. Usually a part of the model that joins '
-                            'two limbs, or arms that aren\'t straight out.' % (100 * share, 100 * base, spots), fixes=fx))
+                            'mostly at the %s: orange in the moving parts check. %s' % (
+                                100 * share, 100 * base, spots,
+                                'At the neck that is the head piece\'s edge bending with the body (so no gap opens there).'
+                                if where and where[0][0] == 'neck' and st.neck == 'seal' else
+                                'Usually a part of the model that joins two limbs, or arms that aren\'t straight out.'), fixes=fx))
         lv = [l for l in said if l.startswith('Levels of detail: your model')]
         if lv:
             out.append(dict(level='fixed', text='Zombies far away use simpler versions; your model is light enough to be drawn in '
